@@ -30,8 +30,11 @@ public interface DataHolder {
     @NotNull
     Map<Identifier, Data> getData();
 
-    default Optional<? extends Data> getData(@NotNull Identifier identifier) {
-        return Optional.ofNullable(getData().get(identifier));
+    default Optional<? extends Data> getData(@NotNull Identifier id) {
+        if (getData().containsKey(id)) {
+            return Optional.of(getData().get(id));
+        }
+        return Optional.empty();
     }
 
     default void setData(@NotNull Identifier identifier, @NotNull Data data) {
@@ -111,6 +114,15 @@ public interface DataHolder {
     }
 
     @NotNull
+    default Optional<Data.Attributes> getAttributes() {
+        return Optional.ofNullable((Data.Attributes) getData().get(Identifier.ATTRIBUTES));
+    }
+
+    default void setAttributes(@NotNull Data.Attributes attributes) {
+        getData().put(Identifier.ATTRIBUTES, attributes);
+    }
+
+    @NotNull
     default Optional<Data.Experience> getExperience() {
         return Optional.ofNullable((Data.Experience) getData().get(Identifier.EXPERIENCE));
     }
@@ -126,6 +138,15 @@ public interface DataHolder {
 
     default void setGameMode(@NotNull Data.GameMode gameMode) {
         getData().put(Identifier.GAME_MODE, gameMode);
+    }
+
+    @NotNull
+    default Optional<Data.FlightStatus> getFlightStatus() {
+        return Optional.ofNullable((Data.FlightStatus) getData().get(Identifier.FLIGHT_STATUS));
+    }
+
+    default void setFlightStatus(@NotNull Data.FlightStatus flightStatus) {
+        getData().put(Identifier.FLIGHT_STATUS, flightStatus);
     }
 
     @NotNull

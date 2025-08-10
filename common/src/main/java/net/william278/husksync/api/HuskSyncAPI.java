@@ -31,21 +31,26 @@ import net.william278.husksync.user.OnlineUser;
 import net.william278.husksync.user.User;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 
 /**
- * The base implementation of the HuskSync API, containing cross-platform API calls.
+ * The common implementation of the HuskSync API, containing cross-platform API calls.
  * </p>
- * This class should not be used directly, but rather through platform-specific extending API classes.
+ * Retrieve an instance of the API class via {@link #getInstance()}.
  *
  * @since 2.0
  */
 @SuppressWarnings("unused")
-public abstract class HuskSyncAPI {
+public class HuskSyncAPI {
+
+    // Instance of the plugin
+    protected static HuskSyncAPI instance;
 
     /**
      * <b>(Internal use only)</b> - Instance of the implementing plugin.
@@ -61,6 +66,28 @@ public abstract class HuskSyncAPI {
     }
 
     /**
+     * Entrypoint to the HuskSync API on the common platform - returns an instance of the API
+     *
+     * @return instance of the HuskSync API
+     * @since 3.3
+     */
+    @NotNull
+    public static HuskSyncAPI getInstance() {
+        if (instance == null) {
+            throw new NotRegisteredException();
+        }
+        return instance;
+    }
+
+    /**
+     * <b>(Internal use only)</b> - Unregister the API for this platform.
+     */
+    @ApiStatus.Internal
+    public static void unregister() {
+        instance = null;
+    }
+
+    /**
      * Get a {@link User} by their UUID
      *
      * @param uuid The UUID of the user to get
@@ -70,6 +97,18 @@ public abstract class HuskSyncAPI {
     @NotNull
     public CompletableFuture<Optional<User>> getUser(@NotNull UUID uuid) {
         return plugin.supplyAsync(() -> plugin.getDatabase().getUser(uuid));
+    }
+
+    /**
+     * Get an {@link OnlineUser} by their UUID
+     *
+     * @param uuid the UUID of the user to get
+     * @return The {@link OnlineUser} wrapped in an optional, if they are online on <i>this</i> server.
+     * @since 3.7.2
+     */
+    @NotNull
+    public Optional<OnlineUser> getOnlineUser(@NotNull UUID uuid) {
+        return plugin.getOnlineUser(uuid);
     }
 
     /**
@@ -110,7 +149,7 @@ public abstract class HuskSyncAPI {
      */
     public CompletableFuture<Optional<DataSnapshot.Unpacked>> getCurrentData(@NotNull User user) {
         return plugin.getRedisManager()
-                .getUserData(UUID.randomUUID(), user)
+                .getOnlineUserData(UUID.randomUUID(), user, DataSnapshot.SaveCause.API)
                 .thenApply(data -> data.or(() -> plugin.getDatabase().getLatestSnapshot(user)))
                 .thenApply(data -> data.map(snapshot -> snapshot.unpack(plugin)));
     }
@@ -147,6 +186,7 @@ public abstract class HuskSyncAPI {
     public void editCurrentData(@NotNull User user, @NotNull ThrowingConsumer<DataSnapshot.Unpacked> editor) {
         getCurrentData(user).thenAccept(optional -> optional.ifPresent(data -> {
             editor.accept(data);
+            data.setId(UUID.randomUUID());
             setCurrentData(user, data);
         }));
     }
@@ -237,13 +277,32 @@ public abstract class HuskSyncAPI {
      *
      * @param user     The user to save the data for
      * @param snapshot The snapshot to save
+     * @param callback A callback to run after the data has been saved (if the DataSaveEvent was not canceled)
+     * @implNote Note that the {@link net.william278.husksync.event.DataSaveEvent} will be fired unless the
+     * {@link DataSnapshot.SaveCause#fireDataSaveEvent()} is {@code false}
+     * @since 3.3.2
+     */
+    public void addSnapshot(@NotNull User user, @NotNull DataSnapshot snapshot,
+                            @Nullable BiConsumer<User, DataSnapshot.Packed> callback) {
+        plugin.runAsync(() -> plugin.getDataSyncer().saveData(
+                user,
+                snapshot instanceof DataSnapshot.Unpacked unpacked
+                        ? unpacked.pack(plugin) : (DataSnapshot.Packed) snapshot,
+                callback
+        ));
+    }
+
+    /**
+     * Adds a data snapshot to the database
+     *
+     * @param user     The user to save the data for
+     * @param snapshot The snapshot to save
+     * @implNote Note that the {@link net.william278.husksync.event.DataSaveEvent} will be fired unless the
+     * {@link DataSnapshot.SaveCause#fireDataSaveEvent()} is {@code false}
      * @since 3.0
      */
     public void addSnapshot(@NotNull User user, @NotNull DataSnapshot snapshot) {
-        plugin.runAsync(() -> plugin.getDatabase().addSnapshot(
-                user, snapshot instanceof DataSnapshot.Unpacked unpacked
-                        ? unpacked.pack(plugin) : (DataSnapshot.Packed) snapshot
-        ));
+        this.addSnapshot(user, snapshot, null);
     }
 
     /**
@@ -329,6 +388,17 @@ public abstract class HuskSyncAPI {
     public <T extends Data> void registerDataSerializer(@NotNull Identifier identifier,
                                                         @NotNull Serializer<T> serializer) {
         plugin.registerSerializer(identifier, serializer);
+    }
+
+    /**
+     * Get a registered data serializer by its identifier
+     *
+     * @param identifier The identifier of the data type to get the serializer for
+     * @return The serializer for the given identifier, or an empty optional if the serializer isn't registered
+     * @since 3.5.4
+     */
+    public Optional<Serializer<Data>> getDataSerializer(@NotNull Identifier identifier) {
+        return plugin.getSerializer(identifier);
     }
 
     /**
@@ -453,17 +523,19 @@ public abstract class HuskSyncAPI {
      */
     static final class NotRegisteredException extends IllegalStateException {
 
-        private static final String MESSAGE = """
-                Could not access the HuskSync API as it has not yet been registered. This could be because:
+        private static final String REASONS = """
+                This may be because:
                 1) HuskSync has failed to enable successfully
                 2) Your plugin isn't set to load after HuskSync has
                    (Check if it set as a (soft)depend in plugin.yml or to load: BEFORE in paper-plugin.yml?)
-                3) You are attempting to access HuskSync on plugin construction/before your plugin has enabled.
-                4) You have shaded HuskSync into your plugin jar and need to fix your maven/gradle/build script
-                   to only include HuskSync as a dependency and not as a shaded dependency.""";
+                3) You are attempting to access HuskSync on plugin construction/before your plugin has enabled.""";
+
+        NotRegisteredException(@NotNull String reasons) {
+            super("Could not access the HuskSync API as it has not yet been registered. %s".formatted(reasons));
+        }
 
         NotRegisteredException() {
-            super(MESSAGE);
+            this(REASONS);
         }
 
     }

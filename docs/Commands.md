@@ -11,7 +11,7 @@ This page contains a table of HuskSync commands and their required permission no
     <tbody>
         <!-- /husksync command -->
         <tr>
-            <td rowspan="5"><code>/husksync</code></td>
+            <td rowspan="7"><code>/husksync</code></td>
             <td><code>/husksync</code></td>
             <td>View & manage plugin system information</td>
             <td><code>husksync.command.husksync</code></td>
@@ -20,6 +20,16 @@ This page contains a table of HuskSync commands and their required permission no
             <td><code>/husksync about</code></td>
             <td>View information about the plugin</td>
             <td><code>husksync.command.husksync.about</code></td>
+        </tr>
+        <tr>
+            <td><code>/husksync status</code></td>
+            <td>View plugin system status information</td>
+            <td><code>husksync.command.husksync.status</code></td>
+        </tr>
+        <tr>
+            <td><code>/husksync dump</code></td>
+            <td>Perform a web dump of the plugin system & server status.</td>
+            <td><code>husksync.command.husksync.dump</code></td>
         </tr>
         <tr>
             <td><code>/husksync reload</code></td>
@@ -38,7 +48,7 @@ This page contains a table of HuskSync commands and their required permission no
         </tr>
         <!-- /userdata command -->
         <tr>
-            <td rowspan="7"><code>/userdata</code></td>
+            <td rowspan="8"><code>/userdata</code></td>
             <td><code>/userdata</code></td>
             <td>View & manage user data snapshots</td>
             <td><code>husksync.command.userdata</code></td>
@@ -57,6 +67,11 @@ This page contains a table of HuskSync commands and their required permission no
             <td><code>/userdata restore</code></td>
             <td>Restore a data snapshot for a user</td>
             <td><code>husksync.command.userdata.restore</code></td>
+        </tr>
+        <tr>
+            <td><code>/userdata save</code></td>
+            <td>Create and save a snapshot of a user's current data</td>
+            <td><code>husksync.command.userdata.save</code></td>
         </tr>
         <tr>
             <td><code>/userdata delete</code></td>

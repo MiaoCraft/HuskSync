@@ -19,38 +19,44 @@
 
 package net.william278.husksync.command;
 
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import de.themoep.minedown.adventure.MineDown;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.JoinConfiguration;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.william278.desertwell.about.AboutMenu;
 import net.william278.desertwell.util.UpdateChecker;
 import net.william278.husksync.HuskSync;
+import net.william278.husksync.data.DataSnapshot;
+import net.william278.husksync.database.Database;
 import net.william278.husksync.migrator.Migrator;
 import net.william278.husksync.user.CommandUser;
-import net.william278.husksync.user.OnlineUser;
+import net.william278.husksync.util.LegacyConverter;
+import net.william278.husksync.util.StatusLine;
+import net.william278.uniform.BaseCommand;
+import net.william278.uniform.CommandProvider;
+import net.william278.uniform.Permission;
+import net.william278.uniform.element.ArgumentElement;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
-import java.util.*;
+import java.time.OffsetDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-public class HuskSyncCommand extends Command implements TabProvider {
-
-    private static final Map<String, Boolean> SUB_COMMANDS = Map.of(
-            "about", false,
-            "reload", true,
-            "migrate", true,
-            "update", true
-    );
+public class HuskSyncCommand extends PluginCommand {
 
     private final UpdateChecker updateChecker;
     private final AboutMenu aboutMenu;
 
     public HuskSyncCommand(@NotNull HuskSync plugin) {
-        super("husksync", List.of(), "[" + String.join("|", SUB_COMMANDS.keySet()) + "]", plugin);
-        addAdditionalPermissions(SUB_COMMANDS);
-
+        super("husksync", List.of(), Permission.Default.TRUE, ExecutionScope.ALL, plugin);
         this.updateChecker = plugin.getUpdateChecker();
         this.aboutMenu = AboutMenu.builder()
                 .title(Component.text("HuskSync"))
@@ -60,7 +66,11 @@ public class HuskSyncCommand extends Command implements TabProvider {
                         AboutMenu.Credit.of("William278").description("Click to visit website").url("https://william278.net"))
                 .credits("Contributors",
                         AboutMenu.Credit.of("HarvelsX").description("Code"),
-                        AboutMenu.Credit.of("HookWoods").description("Code"))
+                        AboutMenu.Credit.of("HookWoods").description("Code"),
+                        AboutMenu.Credit.of("Preva1l").description("Code"),
+                        AboutMenu.Credit.of("hanbings").description("Code (Fabric porting)"),
+                        AboutMenu.Credit.of("Stampede2011").description("Code (Fabric mixins)"),
+                        AboutMenu.Credit.of("VinerDream").description("Code"))
                 .credits("Translators",
                         AboutMenu.Credit.of("Namiu").description("Japanese (ja-jp)"),
                         AboutMenu.Credit.of("anchelthe").description("Spanish (es-es)"),
@@ -72,7 +82,11 @@ public class HuskSyncCommand extends Command implements TabProvider {
                         AboutMenu.Credit.of("Ghost-chu").description("Simplified Chinese (zh-cn)"),
                         AboutMenu.Credit.of("DJelly4K").description("Simplified Chinese (zh-cn)"),
                         AboutMenu.Credit.of("Thourgard").description("Ukrainian (uk-ua)"),
-                        AboutMenu.Credit.of("xF3d3").description("Italian (it-it)"))
+                        AboutMenu.Credit.of("xF3d3").description("Italian (it-it)"),
+                        AboutMenu.Credit.of("cada3141").description("Korean (ko-kr)"),
+                        AboutMenu.Credit.of("Wirayuda5620").description("Indonesian (id-id)"),
+                        AboutMenu.Credit.of("WinTone01").description("Turkish (tr-tr)"),
+                        AboutMenu.Credit.of("IbanEtchep").description("French (fr-fr)"))
                 .buttons(
                         AboutMenu.Link.of("https://william278.net/docs/husksync").text("Documentation").icon("⛏"),
                         AboutMenu.Link.of("https://github.com/WiIIiam278/HuskSync/issues").text("Issues").icon("❌").color(TextColor.color(0xff9f0f)),
@@ -81,104 +95,165 @@ public class HuskSyncCommand extends Command implements TabProvider {
     }
 
     @Override
-    public void execute(@NotNull CommandUser executor, @NotNull String[] args) {
-        final String subCommand = parseStringArg(args, 0).orElse("about").toLowerCase(Locale.ENGLISH);
-        if (SUB_COMMANDS.containsKey(subCommand) && !executor.hasPermission(getPermission(subCommand))) {
-            plugin.getLocales().getLocale("error_no_permission")
-                    .ifPresent(executor::sendMessage);
-            return;
-        }
-
-        switch (subCommand) {
-            case "about" -> executor.sendMessage(aboutMenu.toComponent());
-            case "reload" -> {
-                try {
-                    plugin.loadConfigs();
-                    plugin.getLocales().getLocale("reload_complete").ifPresent(executor::sendMessage);
-                } catch (Throwable e) {
-                    executor.sendMessage(new MineDown(
-                            "[Error:](#ff3300) [Failed to reload the plugin. Check console for errors.](#ff7e5e)"
-                    ));
-                    plugin.log(Level.SEVERE, "Failed to reload the plugin", e);
-                }
-            }
-            case "migrate" -> {
-                if (executor instanceof OnlineUser) {
-                    plugin.getLocales().getLocale("error_console_command_only")
-                            .ifPresent(executor::sendMessage);
-                    return;
-                }
-                this.handleMigrationCommand(args);
-            }
-            case "update" -> updateChecker.check().thenAccept(checked -> {
-                if (checked.isUpToDate()) {
-                    plugin.getLocales().getLocale("up_to_date", plugin.getPluginVersion().toString())
-                            .ifPresent(executor::sendMessage);
-                    return;
-                }
-                plugin.getLocales().getLocale("update_available", checked.getLatestVersion().toString(),
-                        plugin.getPluginVersion().toString()).ifPresent(executor::sendMessage);
-            });
-            default -> plugin.getLocales().getLocale("error_invalid_syntax", getUsage())
-                    .ifPresent(executor::sendMessage);
-        }
+    public void provide(@NotNull BaseCommand<?> command) {
+        command.setDefaultExecutor((ctx) -> about(command, ctx));
+        command.addSubCommand("about", (sub) -> sub.setDefaultExecutor((ctx) -> about(command, ctx)));
+        command.addSubCommand("status", needsOp("status"), status());
+        command.addSubCommand("dump", needsOp("dump"), dump());
+        command.addSubCommand("reload", needsOp("reload"), reload());
+        command.addSubCommand("update", needsOp("update"), update());
+        command.addSubCommand("forceupgrade", forceUpgrade());
+        command.addSubCommand("migrate", migrate());
     }
 
-    // Handle a migration console command input
-    private void handleMigrationCommand(@NotNull String[] args) {
-        if (args.length < 2) {
-            plugin.log(Level.INFO,
-                    "Please choose a migrator, then run \"husksync migrate <migrator>\"");
-            this.logMigratorList();
-            return;
-        }
+    private void about(@NotNull BaseCommand<?> c, @NotNull CommandContext<?> ctx) {
+        user(c, ctx).getAudience().sendMessage(aboutMenu.toComponent());
+    }
 
-        final Optional<Migrator> selectedMigrator = plugin.getAvailableMigrators().stream()
-                .filter(available -> available.getIdentifier().equalsIgnoreCase(args[1]))
-                .findFirst();
-        selectedMigrator.ifPresentOrElse(migrator -> {
-            if (args.length < 3) {
-                plugin.log(Level.INFO, migrator.getHelpMenu());
+    @NotNull
+    private CommandProvider status() {
+        return (sub) -> sub.setDefaultExecutor((ctx) -> {
+            final CommandUser user = user(sub, ctx);
+            plugin.getLocales().getLocale("system_status_header").ifPresent(user::sendMessage);
+            user.sendMessage(Component.join(
+                    JoinConfiguration.newlines(),
+                    Arrays.stream(StatusLine.values()).map(s -> s.get(plugin)).toList()
+            ));
+        });
+    }
+
+    @NotNull
+    private CommandProvider dump() {
+        return (sub) -> {
+            sub.setDefaultExecutor((ctx) -> {
+                final CommandUser user = user(sub, ctx);
+                plugin.getLocales().getLocale("system_dump_confirm").ifPresent(user::sendMessage);
+            });
+            sub.addSubCommand("confirm", (con) -> con.setDefaultExecutor((ctx) -> {
+                final CommandUser user = user(sub, ctx);
+                plugin.getLocales().getLocale("system_dump_started").ifPresent(user::sendMessage);
+                plugin.runAsync(() -> {
+                    final String url = plugin.createDump(user);
+                    plugin.getLocales().getLocale("system_dump_ready").ifPresent(user::sendMessage);
+                    user.sendMessage(Component.text(url).clickEvent(ClickEvent.openUrl(url))
+                            .decorate(TextDecoration.UNDERLINED).color(NamedTextColor.GRAY));
+                });
+            }));
+        };
+    }
+
+    @NotNull
+    private CommandProvider reload() {
+        return (sub) -> sub.setDefaultExecutor((ctx) -> {
+            final CommandUser user = user(sub, ctx);
+            try {
+                plugin.loadSettings();
+                plugin.loadLocales();
+                plugin.loadServer();
+                plugin.getLocales().getLocale("reload_complete").ifPresent(user::sendMessage);
+            } catch (Throwable e) {
+                user.sendMessage(new MineDown(
+                        "[Error:](#ff3300) [Failed to reload the plugin. Check console for errors.](#ff7e5e)"
+                ));
+                plugin.log(Level.SEVERE, "Failed to reload the plugin", e);
+            }
+        });
+    }
+
+    @NotNull
+    private CommandProvider update() {
+        return (sub) -> sub.setDefaultExecutor((ctx) -> updateChecker.check().thenAccept(checked -> {
+            final CommandUser user = user(sub, ctx);
+            if (checked.isUpToDate()) {
+                plugin.getLocales().getLocale("up_to_date", plugin.getPluginVersion().toString())
+                        .ifPresent(user::sendMessage);
                 return;
             }
-            switch (args[2]) {
-                case "start" -> migrator.start().thenAccept(succeeded -> {
+            plugin.getLocales().getLocale("update_available", checked.getLatestVersion().toString(),
+                    plugin.getPluginVersion().toString()).ifPresent(user::sendMessage);
+        }));
+    }
+
+    @NotNull
+    private CommandProvider migrate() {
+        return (sub) -> {
+            sub.setCondition((ctx) -> sub.getUser(ctx).isConsole());
+            sub.setDefaultExecutor((ctx) -> {
+                plugin.log(Level.INFO, "Please choose a migrator, then run \"husksync migrate start <migrator>\"");
+                plugin.log(Level.INFO, String.format(
+                        "List of available migrators:\nMigrator ID / Migrator Name:\n%s",
+                        plugin.getAvailableMigrators().stream()
+                                .map(migrator -> String.format("%s - %s", migrator.getIdentifier(), migrator.getName()))
+                                .collect(Collectors.joining("\n"))
+                ));
+            });
+            sub.addSubCommand("help", (help) -> help.addSyntax((cmd) -> {
+                final Migrator migrator = cmd.getArgument("migrator", Migrator.class);
+                plugin.log(Level.INFO, migrator.getHelpMenu());
+            }, migrator()));
+            sub.addSubCommand("start", (start) -> start.addSyntax((cmd) -> {
+                final Migrator migrator = cmd.getArgument("migrator", Migrator.class);
+                migrator.start().thenAccept(succeeded -> {
                     if (succeeded) {
                         plugin.log(Level.INFO, "Migration completed successfully!");
                     } else {
                         plugin.log(Level.WARNING, "Migration failed!");
                     }
                 });
-                case "set" -> migrator.handleConfigurationCommand(Arrays.copyOfRange(args, 3, args.length));
-                default -> plugin.log(Level.INFO, String.format(
-                        "Invalid syntax. Console usage: \"husksync migrate %s <start/set>", args[1]
-                ));
-            }
-        }, () -> {
-            plugin.log(Level.INFO,
-                    "Please specify a valid migrator.\n" +
-                            "If a migrator is not available, please verify that you meet the prerequisites to use it.");
-            this.logMigratorList();
-        });
-    }
-
-    // Log the list of available migrators
-    private void logMigratorList() {
-        plugin.log(Level.INFO, String.format(
-                "List of available migrators:\nMigrator ID / Migrator Name:\n%s",
-                plugin.getAvailableMigrators().stream()
-                        .map(migrator -> String.format("%s - %s", migrator.getIdentifier(), migrator.getName()))
-                        .collect(Collectors.joining("\n"))
-        ));
-    }
-
-    @Nullable
-    @Override
-    public List<String> suggest(@NotNull CommandUser user, @NotNull String[] args) {
-        return switch (args.length) {
-            case 0, 1 -> SUB_COMMANDS.keySet().stream().sorted().toList();
-            default -> null;
+            }, migrator()));
+            sub.addSubCommand("set", (set) -> set.addSyntax((cmd) -> {
+                final Migrator migrator = cmd.getArgument("migrator", Migrator.class);
+                final String[] args = cmd.getArgument("args", String.class).split(" ");
+                migrator.handleConfigurationCommand(args);
+            }, migrator(), BaseCommand.greedyString("args")));
         };
+    }
+
+    @NotNull
+    private CommandProvider forceUpgrade() {
+        return (sub) -> {
+            sub.setCondition((ctx) -> sub.getUser(ctx).isConsole());
+            sub.setDefaultExecutor((ctx) -> {
+                final LegacyConverter converter = plugin.getLegacyConverter().orElse(null);
+                if (converter == null) {
+                    return;
+                }
+
+                plugin.runAsync(() -> {
+                    final Database database = plugin.getDatabase();
+                    plugin.log(Level.INFO, "Beginning forced legacy data upgrade for all users...");
+                    database.getAllUsers().forEach(user -> database.getLatestSnapshot(user).ifPresent(snapshot -> {
+                        final DataSnapshot.Packed upgraded = converter.convert(
+                                snapshot.asBytes(plugin),
+                                UUID.randomUUID(),
+                                OffsetDateTime.now()
+                        );
+                        upgraded.setSaveCause(DataSnapshot.SaveCause.CONVERTED_FROM_V2);
+                        plugin.getDatabase().addSnapshot(user, upgraded);
+                        plugin.getRedisManager().clearUserData(user);
+                    }));
+                    plugin.log(Level.INFO, "Legacy data upgrade complete!");
+                });
+            });
+        };
+    }
+
+    @NotNull
+    private <S> ArgumentElement<S, Migrator> migrator() {
+        return new ArgumentElement<>("migrator", reader -> {
+            final String id = reader.readString();
+            final Migrator migrator = plugin.getAvailableMigrators().stream()
+                    .filter(m -> m.getIdentifier().equalsIgnoreCase(id)).findFirst().orElse(null);
+            if (migrator == null) {
+                throw CommandSyntaxException.BUILT_IN_EXCEPTIONS.dispatcherUnknownArgument().createWithContext(reader);
+            }
+            return migrator;
+        }, (context, builder) -> {
+            for (Migrator material : plugin.getAvailableMigrators()) {
+                builder.suggest(material.getIdentifier());
+            }
+            return builder.buildFuture();
+        });
     }
 
 }

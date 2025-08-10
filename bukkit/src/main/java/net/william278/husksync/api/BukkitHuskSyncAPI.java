@@ -28,6 +28,7 @@ import net.william278.husksync.user.OnlineUser;
 import net.william278.husksync.user.User;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -43,9 +44,6 @@ import java.util.function.Consumer;
 @SuppressWarnings("unused")
 public class BukkitHuskSyncAPI extends HuskSyncAPI {
 
-    // Instance of the plugin
-    private static BukkitHuskSyncAPI instance;
-
     /**
      * <b>(Internal use only)</b> - Constructor, instantiating the API.
      */
@@ -55,17 +53,21 @@ public class BukkitHuskSyncAPI extends HuskSyncAPI {
     }
 
     /**
-     * Entrypoint to the HuskSync API - returns an instance of the API
+     * Entrypoint to the HuskSync API on the bukkit platform - returns an instance of the API
      *
      * @return instance of the HuskSync API
      * @since 3.0
      */
     @NotNull
     public static BukkitHuskSyncAPI getInstance() {
+        if (!JavaPlugin.getProvidingPlugin(BukkitHuskSyncAPI.class).getName().equals("HuskSync")) {
+            throw new NotRegisteredException("This is likely because you have shaded HuskSync into your plugin JAR " +
+                                             "and need to fix your maven/gradle/build script so that it *compiles against* HuskSync instead.");
+        }
         if (instance == null) {
             throw new NotRegisteredException();
         }
-        return instance;
+        return (BukkitHuskSyncAPI) instance;
     }
 
     /**
@@ -77,14 +79,6 @@ public class BukkitHuskSyncAPI extends HuskSyncAPI {
     @ApiStatus.Internal
     public static void register(@NotNull BukkitHuskSync plugin) {
         instance = new BukkitHuskSyncAPI(plugin);
-    }
-
-    /**
-     * <b>(Internal use only)</b> - Unregister the API for this platform.
-     */
-    @ApiStatus.Internal
-    public static void unregister() {
-        instance = null;
     }
 
     /**

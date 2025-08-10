@@ -19,6 +19,7 @@
 
 package net.william278.husksync.database;
 
+import com.google.common.collect.Lists;
 import com.zaxxer.hikari.HikariDataSource;
 import net.william278.husksync.HuskSync;
 import net.william278.husksync.adapter.DataAdapter;
@@ -26,6 +27,7 @@ import net.william278.husksync.data.DataSnapshot;
 import net.william278.husksync.user.User;
 import org.jetbrains.annotations.Blocking;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,6 +35,8 @@ import java.sql.*;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.logging.Level;
+
+import static net.william278.husksync.config.Settings.DatabaseSettings;
 
 public class MySqlDatabase extends Database {
 
@@ -43,9 +47,10 @@ public class MySqlDatabase extends Database {
 
     public MySqlDatabase(@NotNull HuskSync plugin) {
         super(plugin);
-        this.flavor = plugin.getSettings().getDatabaseType().getProtocol();
-        this.driverClass = plugin.getSettings().getDatabaseType() == Type.MARIADB
-                ? "org.mariadb.jdbc.Driver" : "com.mysql.cj.jdbc.Driver";
+
+        final Type type = plugin.getSettings().getDatabase().getType();
+        this.flavor = type.getProtocol();
+        this.driverClass = type == Type.MARIADB ? "org.mariadb.jdbc.Driver" : "com.mysql.cj.jdbc.Driver";
     }
 
     /**
@@ -67,26 +72,28 @@ public class MySqlDatabase extends Database {
     @Override
     public void initialize() throws IllegalStateException {
         // Initialize the Hikari pooled connection
+        final DatabaseSettings.DatabaseCredentials credentials = plugin.getSettings().getDatabase().getCredentials();
         dataSource = new HikariDataSource();
         dataSource.setDriverClassName(driverClass);
         dataSource.setJdbcUrl(String.format("jdbc:%s://%s:%s/%s%s",
                 flavor,
-                plugin.getSettings().getMySqlHost(),
-                plugin.getSettings().getMySqlPort(),
-                plugin.getSettings().getMySqlDatabase(),
-                plugin.getSettings().getMySqlConnectionParameters()
+                credentials.getHost(),
+                credentials.getPort(),
+                credentials.getDatabase(),
+                credentials.getParameters()
         ));
 
         // Authenticate with the database
-        dataSource.setUsername(plugin.getSettings().getMySqlUsername());
-        dataSource.setPassword(plugin.getSettings().getMySqlPassword());
+        dataSource.setUsername(credentials.getUsername());
+        dataSource.setPassword(credentials.getPassword());
 
         // Set connection pool options
-        dataSource.setMaximumPoolSize(plugin.getSettings().getMySqlConnectionPoolSize());
-        dataSource.setMinimumIdle(plugin.getSettings().getMySqlConnectionPoolIdle());
-        dataSource.setMaxLifetime(plugin.getSettings().getMySqlConnectionPoolLifetime());
-        dataSource.setKeepaliveTime(plugin.getSettings().getMySqlConnectionPoolKeepAlive());
-        dataSource.setConnectionTimeout(plugin.getSettings().getMySqlConnectionPoolTimeout());
+        final DatabaseSettings.PoolSettings pool = plugin.getSettings().getDatabase().getConnectionPool();
+        dataSource.setMaximumPoolSize(pool.getMaximumPoolSize());
+        dataSource.setMinimumIdle(pool.getMinimumIdle());
+        dataSource.setMaxLifetime(pool.getMaximumLifetime());
+        dataSource.setKeepaliveTime(pool.getKeepaliveTime());
+        dataSource.setConnectionTimeout(pool.getConnectionTimeout());
         dataSource.setPoolName(DATA_POOL_NAME);
 
         // Set additional connection pool properties
@@ -108,6 +115,9 @@ public class MySqlDatabase extends Database {
                         "maintainTimeStats", "false")
         );
         dataSource.setDataSourceProperties(properties);
+
+        // Check config for if tables should be created
+        if (!plugin.getSettings().getDatabase().isCreateTables()) return;
 
         // Prepare database schema; make tables if they don't exist
         try (Connection connection = dataSource.getConnection()) {
@@ -131,7 +141,7 @@ public class MySqlDatabase extends Database {
     public void ensureUser(@NotNull User user) {
         getUser(user.getUuid()).ifPresentOrElse(
                 existingUser -> {
-                    if (!existingUser.getUsername().equals(user.getUsername())) {
+                    if (!existingUser.getName().equals(user.getName())) {
                         // Update a user's name if it has changed in the database
                         try (Connection connection = getConnection()) {
                             try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
@@ -139,11 +149,12 @@ public class MySqlDatabase extends Database {
                                     SET `username`=?
                                     WHERE `uuid`=?"""))) {
 
-                                statement.setString(1, user.getUsername());
+                                statement.setString(1, user.getName());
                                 statement.setString(2, existingUser.getUuid().toString());
                                 statement.executeUpdate();
                             }
-                            plugin.log(Level.INFO, "Updated " + user.getUsername() + "'s name in the database (" + existingUser.getUsername() + " -> " + user.getUsername() + ")");
+                            plugin.log(Level.INFO, "Updated " + user.getName() + "'s name in the database ("
+                                    + existingUser.getName() + " -> " + user.getName() + ")");
                         } catch (SQLException e) {
                             plugin.log(Level.SEVERE, "Failed to update a user's name on the database", e);
                         }
@@ -157,7 +168,7 @@ public class MySqlDatabase extends Database {
                                 VALUES (?,?);"""))) {
 
                             statement.setString(1, user.getUuid().toString());
-                            statement.setString(2, user.getUsername());
+                            statement.setString(2, user.getName());
                             statement.executeUpdate();
                         }
                     } catch (SQLException e) {
@@ -212,6 +223,27 @@ public class MySqlDatabase extends Database {
         return Optional.empty();
     }
 
+    @Override
+    @NotNull
+    public List<User> getAllUsers() {
+        final List<User> users = Lists.newArrayList();
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    SELECT `uuid`, `username`
+                    FROM `%users_table%`;
+                    """))) {
+                final ResultSet resultSet = statement.executeQuery();
+                while (resultSet.next()) {
+                    users.add(new User(UUID.fromString(resultSet.getString("uuid")),
+                            resultSet.getString("username")));
+                }
+            }
+        } catch (SQLException e) {
+            plugin.log(Level.SEVERE, "Failed to fetch a user by name from the database", e);
+        }
+        return users;
+    }
+
     @Blocking
     @Override
     public Optional<DataSnapshot.Packed> getLatestSnapshot(@NotNull User user) {
@@ -245,7 +277,7 @@ public class MySqlDatabase extends Database {
     @Override
     @NotNull
     public List<DataSnapshot.Packed> getAllSnapshots(@NotNull User user) {
-        final List<DataSnapshot.Packed> retrievedData = new ArrayList<>();
+        final List<DataSnapshot.Packed> retrievedData = Lists.newArrayList();
         try (Connection connection = getConnection()) {
             try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
                     SELECT `version_uuid`, `timestamp`,  `data`
@@ -267,9 +299,28 @@ public class MySqlDatabase extends Database {
                 return retrievedData;
             }
         } catch (SQLException | DataAdapter.AdaptionException e) {
-            plugin.log(Level.SEVERE, "Failed to fetch a user's current user data from the database", e);
+            plugin.log(Level.SEVERE, "Failed to fetch a user's list of snapshots from the database", e);
         }
         return retrievedData;
+    }
+
+    @Override
+    public int getUnpinnedSnapshotCount(@NotNull User user) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+            SELECT COUNT(`version_uuid`)
+            FROM `%user_data_table%`
+            WHERE `player_uuid`=? AND `pinned`=false;"""))) {
+                statement.setString(1, user.getUuid().toString());
+                final ResultSet resultSet = statement.executeQuery();
+                if (resultSet.next()) {
+                    return resultSet.getInt(1);
+                }
+            }
+        } catch (SQLException e) {
+            plugin.log(Level.SEVERE, "Failed to fetch a user's current snapshot count", e);
+        }
+        return 0;
     }
 
     @Blocking
@@ -304,9 +355,9 @@ public class MySqlDatabase extends Database {
     @Blocking
     @Override
     protected void rotateSnapshots(@NotNull User user) {
-        final List<DataSnapshot.Packed> unpinnedUserData = getAllSnapshots(user).stream()
-                .filter(dataSnapshot -> !dataSnapshot.isPinned()).toList();
-        if (unpinnedUserData.size() > plugin.getSettings().getMaxUserDataSnapshots()) {
+        final int unpinnedSnapshots = getUnpinnedSnapshotCount(user);
+        final int maxSnapshots = plugin.getSettings().getSynchronization().getMaxUserDataSnapshots();
+        if (unpinnedSnapshots > maxSnapshots) {
             try (Connection connection = getConnection()) {
                 try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
                         DELETE FROM `%user_data_table%`
@@ -314,7 +365,7 @@ public class MySqlDatabase extends Database {
                         AND `pinned` IS FALSE
                         ORDER BY `timestamp` ASC
                         LIMIT %entry_count%;""".replace("%entry_count%",
-                        Integer.toString(unpinnedUserData.size() - plugin.getSettings().getMaxUserDataSnapshots()))))) {
+                        Integer.toString(unpinnedSnapshots - maxSnapshots))))) {
                     statement.setString(1, user.getUuid().toString());
                     statement.executeUpdate();
                 }
@@ -400,6 +451,120 @@ public class MySqlDatabase extends Database {
         } catch (SQLException e) {
             plugin.log(Level.SEVERE, "Failed to pin user data in the database", e);
         }
+    }
+
+    @Blocking
+    @Override
+    public void saveMapData(@NotNull String serverName, int mapId, byte @NotNull [] data) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    INSERT INTO `%map_data_table%`
+                    (`server_name`,`map_id`,`data`)
+                    VALUES (?,?,?);"""))) {
+                statement.setString(1, serverName);
+                statement.setInt(2, mapId);
+                statement.setBlob(3, new ByteArrayInputStream(data));
+                statement.executeUpdate();
+            }
+        } catch (SQLException | DataAdapter.AdaptionException e) {
+            plugin.log(Level.SEVERE, "Failed to write map data to the database", e);
+        }
+    }
+
+    @Blocking
+    @Override
+    public @Nullable Map.Entry<byte[], Boolean> getMapData(@NotNull String serverName, int mapId) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    SELECT `data`
+                    FROM `%map_data_table%`
+                    WHERE `server_name`=? AND `map_id`=?
+                    LIMIT 1;"""))) {
+                statement.setString(1, serverName);
+                statement.setInt(2, mapId);
+
+                final ResultSet resultSet = statement.executeQuery();
+                if (resultSet.next()) {
+                    final Blob blob = resultSet.getBlob("data");
+                    final byte[] dataByteArray = blob.getBytes(1, (int) blob.length());
+                    blob.free();
+                    return Map.entry(dataByteArray, true);
+                }
+            }
+        } catch (SQLException | DataAdapter.AdaptionException e) {
+            plugin.log(Level.SEVERE, "Failed to get map data from the database", e);
+        }
+        return null;
+    }
+
+    @Blocking
+    @Override
+    public @Nullable Map.Entry<String, Integer> getMapBinding(@NotNull String serverName, int mapId) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    SELECT `from_server_name`, `from_id`
+                    FROM `%map_ids_table%`
+                    WHERE `to_server_name`=? AND `to_id`=?
+                    LIMIT 1;
+                    """))) {
+                statement.setString(1, serverName);
+                statement.setInt(2, mapId);
+
+                final ResultSet resultSet = statement.executeQuery();
+                if (resultSet.next()) {
+                    return new AbstractMap.SimpleImmutableEntry<>(
+                            resultSet.getString("from_server_name"),
+                            resultSet.getInt("from_id")
+                    );
+                }
+            }
+        } catch (SQLException | DataAdapter.AdaptionException e) {
+            plugin.log(Level.SEVERE, "Failed to get map data from the database", e);
+        }
+        return null;
+    }
+
+    @Blocking
+    @Override
+    public void setMapBinding(@NotNull String fromServerName, int fromMapId, @NotNull String toServerName, int toMapId) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    INSERT INTO `%map_ids_table%`
+                    (`from_server_name`,`from_id`,`to_server_name`,`to_id`)
+                    VALUES (?,?,?,?);"""))) {
+                statement.setString(1, fromServerName);
+                statement.setInt(2, fromMapId);
+                statement.setString(3, toServerName);
+                statement.setInt(4, toMapId);
+                statement.executeUpdate();
+            }
+        } catch (SQLException | DataAdapter.AdaptionException e) {
+            plugin.log(Level.SEVERE, "Failed to connect map IDs in the database", e);
+        }
+    }
+
+    @Blocking
+    @Override
+    public int getBoundMapId(@NotNull String fromServerName, int fromMapId, @NotNull String toServerName) {
+        try (Connection connection = getConnection()) {
+            try (PreparedStatement statement = connection.prepareStatement(formatStatementTables("""
+                    SELECT `to_id`
+                    FROM `%map_ids_table%`
+                    WHERE `from_server_name`=? AND `from_id`=? AND `to_server_name`=?
+                    LIMIT 1;"""))) {
+                statement.setString(1, fromServerName);
+                statement.setInt(2, fromMapId);
+                statement.setString(3, toServerName);
+
+                final ResultSet resultSet = statement.executeQuery();
+                if (resultSet.next()) {
+                    return resultSet.getInt("to_id");
+                }
+            }
+        } catch (SQLException | DataAdapter.AdaptionException e) {
+            plugin.log(Level.SEVERE, "Failed to get new map id from the database", e);
+        }
+        return -1;
     }
 
     @Override

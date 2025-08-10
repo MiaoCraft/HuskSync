@@ -1,7 +1,7 @@
 The HuskSync API (v3) provides methods for retrieving and updating [data snapshots](Data-Snapshot-API), a number of [[API Events]] for tracking when user data is synced and saved, and infrastructure for registering serializers to [synchronise custom data types](Custom-Data-API).
 
 ## Compatibility
-[![Maven](https://repo.william278.net/api/badge/latest/releases/net/william278/husksync?color=00fb9a&name=Maven&prefix=v)](https://repo.william278.net/#/releases/net/william278/husksync/)
+[![Maven](https://repo.william278.net/api/badge/latest/releases/net/william278/husksync/husksync-common?color=00fb9a&name=Maven&prefix=v)](https://repo.william278.net/#/releases/net/william278/husksync/)
 
 The HuskSync API shares version numbering with the plugin itself for consistency and convenience. Please note minor and patch plugin releases may make API additions and deprecations, but will not introduce breaking changes without notice.
 
@@ -11,21 +11,32 @@ The HuskSync API shares version numbering with the plugin itself for consistency
 |    v2.x     | _v2.0&mdash;v2.2.8_  |     ❌     |
 |    v1.x     | _v1.0&mdash;v1.4.1_  |    ❌️     |
 
+### Platforms
+> **Note:** For versions older than `v3.3`, the HuskSync API was only distributed for the Bukkit platform (as `net.william278:husksync`) 
+
+The HuskSync API is available for the following platforms:
+
+* `bukkit` - Bukkit, Spigot, Paper, etc. Provides Bukkit API event listeners and adapters to `org.bukkit` objects.
+* `fabric` - Fabric API for Minecraft. Provides Fabric API event listeners and adapters to `net.minecraft` objects.
+* `common` - Common API for all platforms.
+
 <details>
 <summary>Targeting older versions</summary>
 
-HuskSync versions prior to `v2.2.5` are distributed on [JitPack](https://jitpack.io/#/net/william278/HuskSync), and you will need to use the `https://jitpack.io` repository instead.
+* The HuskSync API was only distributed for the Bukkit module prior to `v3.3`; the artifact ID was `net.william278:husksync` instead of `net.william278.husksync:husksync-PLATFORM`. 
+* HuskSync versions prior to `v2.2.5` are distributed on [JitPack](https://jitpack.io/#/net/william278/HuskSync), and you will need to use the `https://jitpack.io` repository instead.
 </details>
 
 ## Table of Contents
 1. [API Introduction](#api-introduction)
     1. [Setup with Maven](#11-setup-with-maven)
     2. [Setup with Gradle](#12-setup-with-gradle)
-2. [Creating a class to interface with the API](#3-creating-a-class-to-interface-with-the-api)
-3. [Checking if HuskSync is present and creating the hook](#4-checking-if-husksync-is-present-and-creating-the-hook)
-4. [Getting an instance of the API](#5-getting-an-instance-of-the-api)
-5. [CompletableFuture and Optional basics](#6-completablefuture-and-optional-basics)
-6. [Next steps](#7-next-steps)
+2. [Adding HuskSync as a dependency](#2-adding-husksync-as-a-dependency)
+3. [Creating a class to interface with the API](#3-creating-a-class-to-interface-with-the-api)
+4. [Checking if HuskSync is present and creating the hook](#4-checking-if-husksync-is-present-and-creating-the-hook)
+5. [Getting an instance of the API](#5-getting-an-instance-of-the-api)
+6. [CompletableFuture and Optional basics](#6-completablefuture-and-optional-basics)
+7. [Next steps](#7-next-steps)
 
 ## API Introduction
 ### 1.1 Setup with Maven
@@ -41,12 +52,12 @@ Add the repository to your `pom.xml` as per below. You can alternatively specify
     </repository>
 </repositories>
 ```
-Add the dependency to your `pom.xml` as per below. Replace `VERSION` with the latest version of HuskSync (without the v): ![Latest version](https://img.shields.io/github/v/tag/WiIIiam278/HuskSync?color=%23282828&label=%20&style=flat-square)
+Add the dependency to your `pom.xml` as per below. Replace `HUSKSYNC_VERSION` with the latest version of HuskSync (without the v): ![Latest version](https://img.shields.io/github/v/tag/WiIIiam278/HuskSync?color=%23282828&label=%20&style=flat-square). and `MINECRAFT_VERSION` with the version of Minecraft you want to target (e.g. `1.20.1`). A correctly formed version target should look like: `3.7+1.20.1`. Omit the plus symbol and Minecraft version if you are targeting the `common` platform.
 ```xml
 <dependency>
-    <groupId>net.william278</groupId>
-    <artifactId>husksync</artifactId>
-    <version>VERSION</version>
+    <groupId>net.william278.husksync</groupId>
+    <artifactId>husksync-PLATFORM</artifactId>
+    <version>HUSKSYNC_VERSION+MINECRAFT_VERSION</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -64,16 +75,16 @@ allprojects {
 	}
 }
 ```
-Add the dependency as per below. Replace `VERSION` with the latest version of HuskSync (without the v): ![Latest version](https://img.shields.io/github/v/tag/WiIIiam278/HuskSync?color=%23282828&label=%20&style=flat-square)
+Add the dependency as per below. Replace `HUSKSYNC_VERSION` with the latest version of HuskSync (without the v): ![Latest version](https://img.shields.io/github/v/tag/WiIIiam278/HuskSync?color=%23282828&label=%20&style=flat-square). and `MINECRAFT_VERSION` with the version of Minecraft you want to target (e.g. `1.20.1`). A correctly formed version target should look like: `3.7+1.20.1`. Omit the plus symbol and Minecraft version if you are targeting the `common` platform.
 
 ```groovy
 dependencies {
-    compileOnly 'net.william278:husksync:VERSION'
+    compileOnly 'net.william278.husksync:husksync-PLATFORM:HUSKSYNC_VERSION+MINECRAFT_VERSION'
 }
 ```
 </details>
 
-### 2. Adding HuskSync as a dependency
+## 2. Adding HuskSync as a dependency
 - Add HuskSync to your `softdepend` (if you want to optionally use HuskSync) or `depend` (if your plugin relies on HuskSync) section in `plugin.yml` of your project.
 
 ```yaml
@@ -117,9 +128,10 @@ public class MyPlugin extends JavaPlugin {
 
 ## 5. Getting an instance of the API
 - You can now get the API instance by calling `HuskSyncAPI#getInstance()`
+- If targeting the Bukkit platform, you can also use `BukkitHuskSyncAPI#getBukkitInstance()` to get the Bukkit-extended API instance (recommended)
 
 ```java
-import net.william278.husksync.api.BukkitHuskSyncAPI;
+import net.william278.husksync.api.HuskSyncAPI;
 
 public class HuskSyncAPIHook {
 
@@ -135,7 +147,7 @@ public class HuskSyncAPIHook {
 ## 6. CompletableFuture and Optional basics
 - HuskSync's API methods often deal with `CompletableFuture`s and `Optional`s.
 - A `CompletableFuture` is an asynchronous callback mechanism. The method will be processed asynchronously and the data returned when it has been retrieved. Then, use `CompletableFuture#thenAccept(data -> {})` to do what you want to do with the `data` you requested after it has asynchronously been retrieved, to prevent lag.
-- An `Optional` is a null-safe representation of data, or no data. You can check if the Optional is empty via `Optional#isEmpty()` (which will be returned by the API if no data could be found for the call you made). If the optional does contain data, you can get it via `Optional#get().
+- An `Optional` is a null-safe representation of data, or no data. You can check if the Optional is empty via `Optional#isEmpty()` (which will be returned by the API if no data could be found for the call you made). If the optional does contain data, you can get it via `Optional#get()`.
 
 > **Warning:** You should never call `#join()` on futures returned from the HuskSyncAPI as futures are processed on server asynchronous tasks, which could lead to thread deadlock and crash your server if you attempt to lock the main thread to process them.
 

@@ -19,14 +19,20 @@
 
 package net.william278.husksync.data;
 
+import com.google.common.collect.Maps;
 import com.google.gson.annotations.Expose;
 import com.google.gson.annotations.SerializedName;
 import de.themoep.minedown.adventure.MineDown;
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
 import net.william278.desertwell.util.Version;
 import net.william278.husksync.HuskSync;
 import net.william278.husksync.adapter.Adaptable;
 import net.william278.husksync.adapter.DataAdapter;
-import net.william278.husksync.config.Locales;
+import org.apache.commons.text.WordUtils;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -41,6 +47,8 @@ import java.util.stream.Collectors;
  *
  * @since 3.0
  */
+@SuppressWarnings({"LombokSetterMayBeUsed", "LombokGetterMayBeUsed"})
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class DataSnapshot {
 
     /*
@@ -59,7 +67,7 @@ public class DataSnapshot {
     protected OffsetDateTime timestamp;
 
     @SerializedName("save_cause")
-    protected SaveCause saveCause;
+    protected String saveCause;
 
     @SerializedName("server_name")
     protected String serverName;
@@ -76,8 +84,13 @@ public class DataSnapshot {
     @SerializedName("data")
     protected Map<String, String> data;
 
+    // If the snapshot is invalid, this will be set to the validation exception
+    @Nullable
+    @Expose(serialize = false, deserialize = false)
+    transient DataException.Reason exception = null;
+
     private DataSnapshot(@NotNull UUID id, boolean pinned, @NotNull OffsetDateTime timestamp,
-                         @NotNull SaveCause saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
+                         @NotNull String saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
                          @NotNull Version minecraftVersion, @NotNull String platformType, int formatVersion) {
         this.id = id;
         this.pinned = pinned;
@@ -90,10 +103,6 @@ public class DataSnapshot {
         this.formatVersion = formatVersion;
     }
 
-    @SuppressWarnings("unused")
-    private DataSnapshot() {
-    }
-
     @NotNull
     @ApiStatus.Internal
     public static DataSnapshot.Builder builder(@NotNull HuskSync plugin) {
@@ -104,37 +113,25 @@ public class DataSnapshot {
     @NotNull
     @ApiStatus.Internal
     public static DataSnapshot.Packed deserialize(@NotNull HuskSync plugin, byte[] data, @Nullable UUID id,
-                                                  @Nullable OffsetDateTime timestamp) throws IllegalStateException {
+                                                  @Nullable OffsetDateTime timestamp) {
         final DataSnapshot.Packed snapshot = plugin.getDataAdapter().fromBytes(data, DataSnapshot.Packed.class);
         if (snapshot.getMinecraftVersion().compareTo(plugin.getMinecraftVersion()) > 0) {
-            throw new IllegalStateException(String.format("Cannot set data for user because the Minecraft version of " +
-                            "their user data (%s) is newer than the server's Minecraft version (%s)." +
-                            "Please ensure each server is running the same version of Minecraft.",
-                    snapshot.getMinecraftVersion(), plugin.getMinecraftVersion()));
+            return snapshot.invalid(DataException.Reason.INVALID_MINECRAFT_VERSION);
         }
         if (snapshot.getFormatVersion() > CURRENT_FORMAT_VERSION) {
-            throw new IllegalStateException(String.format("Cannot set data for user because the format version of " +
-                            "their user data (%s) is newer than the current format version (%s). " +
-                            "Please ensure each server is running the latest version of HuskSync.",
-                    snapshot.getFormatVersion(), CURRENT_FORMAT_VERSION));
+            return snapshot.invalid(DataException.Reason.INVALID_FORMAT_VERSION);
         }
         if (snapshot.getFormatVersion() < 4) {
             if (plugin.getLegacyConverter().isPresent()) {
                 return plugin.getLegacyConverter().get().convert(
-                        data,
-                        Objects.requireNonNull(id, "Attempted legacy conversion with null UUID!"),
+                        data, Objects.requireNonNull(id, "Attempted legacy conversion with null UUID!"),
                         Objects.requireNonNull(timestamp, "Attempted legacy conversion with null timestamp!")
                 );
             }
-            throw new IllegalStateException(String.format(
-                    "No legacy converter to convert format version: %s", snapshot.getFormatVersion()
-            ));
+            return snapshot.invalid(DataException.Reason.NO_LEGACY_CONVERTER);
         }
         if (!snapshot.getPlatformType().equalsIgnoreCase(plugin.getPlatformType())) {
-            throw new IllegalStateException(String.format("Cannot set data for user because the platform type of " +
-                            "their user data (%s) is different to the server platform type (%s). " +
-                            "Please ensure each server is running the same platform type.",
-                    snapshot.getPlatformType(), plugin.getPlatformType()));
+            return snapshot.invalid(DataException.Reason.INVALID_PLATFORM_TYPE);
         }
         return snapshot;
     }
@@ -155,6 +152,17 @@ public class DataSnapshot {
     @NotNull
     public UUID getId() {
         return id;
+    }
+
+    /**
+     * <b>Internal use only</b> Set the ID of the snapshot
+     *
+     * @param id The snapshot ID
+     * @since 3.0
+     */
+    @ApiStatus.Internal
+    public void setId(@NotNull UUID id) {
+        this.id = id;
     }
 
     /**
@@ -196,7 +204,7 @@ public class DataSnapshot {
      */
     @NotNull
     public SaveCause getSaveCause() {
-        return saveCause;
+        return SaveCause.of(saveCause);
     }
 
     /**
@@ -219,7 +227,7 @@ public class DataSnapshot {
      * @since 3.0
      */
     public void setSaveCause(@NotNull SaveCause saveCause) {
-        this.saveCause = saveCause;
+        this.saveCause = saveCause.name();
     }
 
     /**
@@ -270,16 +278,39 @@ public class DataSnapshot {
      *
      * @since 3.0
      */
+    @NoArgsConstructor(access = AccessLevel.PRIVATE)
     public static class Packed extends DataSnapshot implements Adaptable {
 
         protected Packed(@NotNull UUID id, boolean pinned, @NotNull OffsetDateTime timestamp,
-                         @NotNull SaveCause saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
+                         @NotNull String saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
                          @NotNull Version minecraftVersion, @NotNull String platformType, int formatVersion) {
             super(id, pinned, timestamp, saveCause, serverName, data, minecraftVersion, platformType, formatVersion);
         }
 
-        @SuppressWarnings("unused")
-        private Packed() {
+        @NotNull
+        @ApiStatus.Internal
+        DataSnapshot.Packed invalid(@NotNull DataException.Reason reason) {
+            this.exception = reason;
+            return this;
+        }
+
+        public boolean isInvalid() {
+            return exception != null;
+        }
+
+        @NotNull
+        public String getInvalidReason(@NotNull HuskSync plugin) {
+            if (exception == null) {
+                throw new IllegalStateException("Attempted to get an invalid reason for a valid snapshot!");
+            }
+            return exception.getMessage(plugin, this);
+        }
+
+        @ApiStatus.Internal
+        void validate(@NotNull HuskSync plugin) throws DataException {
+            if (exception != null) {
+                throw exception.toException(this, plugin);
+            }
         }
 
         @ApiStatus.Internal
@@ -287,7 +318,7 @@ public class DataSnapshot {
             final Unpacked data = unpack(plugin);
             editor.accept(data);
             this.pinned = data.isPinned();
-            this.saveCause = data.getSaveCause();
+            this.saveCause = data.getSaveCause().name();
             this.data = data.serializeData(plugin);
         }
 
@@ -304,7 +335,6 @@ public class DataSnapshot {
             );
         }
 
-        @NotNull
         @ApiStatus.Internal
         public byte[] asBytes(@NotNull HuskSync plugin) throws DataAdapter.AdaptionException {
             return plugin.getDataAdapter().toBytes(this);
@@ -322,7 +352,8 @@ public class DataSnapshot {
         }
 
         @NotNull
-        public DataSnapshot.Unpacked unpack(@NotNull HuskSync plugin) {
+        public DataSnapshot.Unpacked unpack(@NotNull HuskSync plugin) throws DataException {
+            this.validate(plugin);
             return new Unpacked(
                     id, pinned, timestamp, saveCause, serverName, data,
                     getMinecraftVersion(), platformType, formatVersion, plugin
@@ -342,7 +373,7 @@ public class DataSnapshot {
         private final Map<Identifier, Data> deserialized;
 
         private Unpacked(@NotNull UUID id, boolean pinned, @NotNull OffsetDateTime timestamp,
-                         @NotNull SaveCause saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
+                         @NotNull String saveCause, @NotNull String serverName, @NotNull Map<String, String> data,
                          @NotNull Version minecraftVersion, @NotNull String platformType, int formatVersion,
                          @NotNull HuskSync plugin) {
             super(id, pinned, timestamp, saveCause, serverName, data, minecraftVersion, platformType, formatVersion);
@@ -350,7 +381,7 @@ public class DataSnapshot {
         }
 
         private Unpacked(@NotNull UUID id, boolean pinned, @NotNull OffsetDateTime timestamp,
-                         @NotNull SaveCause saveCause, @NotNull String serverName, @NotNull Map<Identifier, Data> data,
+                         @NotNull String saveCause, @NotNull String serverName, @NotNull Map<Identifier, Data> data,
                          @NotNull Version minecraftVersion, @NotNull String platformType, int formatVersion) {
             super(id, pinned, timestamp, saveCause, serverName, Map.of(), minecraftVersion, platformType, formatVersion);
             this.deserialized = data;
@@ -360,23 +391,26 @@ public class DataSnapshot {
         @ApiStatus.Internal
         private Map<Identifier, Data> deserializeData(@NotNull HuskSync plugin) {
             return data.entrySet().stream()
-                    .map((entry) -> plugin.getIdentifier(entry.getKey()).map(id -> Map.entry(
-                            id, plugin.getSerializers().get(id).deserialize(entry.getValue())
-                    )).orElse(null))
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                    .filter(e -> plugin.getIdentifier(e.getKey()).isPresent())
+                    .map(entry -> Map.entry(plugin.getIdentifier(entry.getKey()).orElseThrow(), entry.getValue()))
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey,
+                            entry -> plugin.deserializeData(entry.getKey(), entry.getValue(), getMinecraftVersion()),
+                            (a, b) -> a,
+                            HashMap::new
+                    ));
         }
 
         @NotNull
         @ApiStatus.Internal
         private Map<String, String> serializeData(@NotNull HuskSync plugin) {
             return deserialized.entrySet().stream()
-                    .map((entry) -> Map.entry(entry.getKey().toString(),
-                            Objects.requireNonNull(
-                                    plugin.getSerializers().get(entry.getKey()),
-                                    String.format("No serializer found for %s", entry.getKey())
-                            ).serialize(entry.getValue())))
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                    .collect(Collectors.toMap(
+                            entry -> entry.getKey().toString(),
+                            entry -> plugin.serializeData(entry.getKey(), entry.getValue()),
+                            (a, b) -> a,
+                            HashMap::new
+                    ));
         }
 
         /**
@@ -388,6 +422,20 @@ public class DataSnapshot {
         @NotNull
         public Map<Identifier, Data> getData() {
             return deserialized;
+        }
+
+        /**
+         * Get a sorted iterable of the snapshots the snapshot is holding
+         *
+         * @return The data map
+         * @since 3.8.2
+         */
+        @NotNull
+        @ApiStatus.Internal
+        public Iterable<Map.Entry<Identifier, Data>> getSortedIterable() {
+            final TreeMap<Identifier, Data> tree = Maps.newTreeMap(SerializerRegistry.DEPENDENCY_ORDER_COMPARATOR);
+            tree.putAll(deserialized);
+            return tree.entrySet();
         }
 
         /**
@@ -427,7 +475,7 @@ public class DataSnapshot {
         private Builder(@NotNull HuskSync plugin) {
             this.plugin = plugin;
             this.pinned = false;
-            this.data = new HashMap<>();
+            this.data = Maps.newHashMap();
             this.timestamp = OffsetDateTime.now();
             this.id = UUID.randomUUID();
             this.serverName = plugin.getServerName();
@@ -503,7 +551,10 @@ public class DataSnapshot {
         @NotNull
         public Builder timestamp(@NotNull OffsetDateTime timestamp) {
             if (timestamp.isAfter(OffsetDateTime.now())) {
-                throw new IllegalArgumentException("Data snapshots cannot have a timestamp set in the future");
+                throw new IllegalArgumentException("Data snapshots cannot have a timestamp set in the future! "
+                        + "Make sure your database server time matches the server time.\n"
+                        + "Current game server timestamp: " + OffsetDateTime.now() + " / "
+                        + "Snapshot timestamp: " + timestamp);
             }
             this.timestamp = timestamp;
             return this;
@@ -657,6 +708,21 @@ public class DataSnapshot {
         }
 
         /**
+         * Set the attributes of the snapshot
+         * <p>
+         * Equivalent to {@code data(Identifier.ATTRIBUTES, attributes)}
+         * </p>
+         *
+         * @param attributes The user's attributes
+         * @return The builder
+         * @since 3.5
+         */
+        @NotNull
+        public Builder attributes(@NotNull Data.Attributes attributes) {
+            return data(Identifier.ATTRIBUTES, attributes);
+        }
+
+        /**
          * Set the experience of the snapshot
          * <p>
          * Equivalent to {@code data(Identifier.EXPERIENCE, experience)}
@@ -684,6 +750,21 @@ public class DataSnapshot {
         @NotNull
         public Builder gameMode(@NotNull Data.GameMode gameMode) {
             return data(Identifier.GAME_MODE, gameMode);
+        }
+
+        /**
+         * Set the flight status of the snapshot
+         * <p>
+         * Equivalent to {@code data(Identifier.FLIGHT_STATUS, flightStatus)}
+         * </p>
+         *
+         * @param flightStatus The flight status
+         * @return The builder
+         * @since 3.5
+         */
+        @NotNull
+        public Builder flightStatus(@NotNull Data.FlightStatus flightStatus) {
+            return data(Identifier.FLIGHT_STATUS, flightStatus);
         }
 
         /**
@@ -715,9 +796,9 @@ public class DataSnapshot {
             }
             return new Unpacked(
                     id,
-                    pinned || plugin.getSettings().doAutoPin(saveCause),
+                    pinned || plugin.getSettings().getSynchronization().doAutoPin(saveCause),
                     timestamp,
-                    saveCause,
+                    saveCause.name(),
                     serverName,
                     data,
                     plugin.getMinecraftVersion(),
@@ -740,134 +821,289 @@ public class DataSnapshot {
 
     }
 
+    public interface Cause {
+
+        @NotNull
+        String name();
+
+        /**
+         * Returns the capitalized display name of the cause.
+         *
+         * @return the cause display name
+         */
+        @NotNull
+        default String getDisplayName() {
+            return WordUtils.capitalizeFully(name().replaceAll("_", " "));
+        }
+
+    }
+
     /**
-     * Identifies the cause of a player data save.
-     *
-     * @implNote This enum is saved in the database.
+     * A string wrapper, for identifying the cause of a player data save.
      * </p>
      * Cause names have a max length of 32 characters.
      */
-    public enum SaveCause {
+    @Accessors(fluent = true)
+    @Getter
+    @AllArgsConstructor(access = AccessLevel.PRIVATE)
+    public static class SaveCause implements Cause {
 
         /**
          * Indicates data saved when a player disconnected from the server (either to change servers, or to log off)
          *
          * @since 2.0
          */
-        DISCONNECT,
+        public static final SaveCause DISCONNECT = of("DISCONNECT");
+
         /**
          * Indicates data saved when the world saved
          *
          * @since 2.0
          */
-        WORLD_SAVE,
+        public static final SaveCause WORLD_SAVE = of("WORLD_SAVE");
+
         /**
          * Indicates data saved when the user died
          *
          * @since 2.1
          */
-        DEATH,
+        public static final SaveCause DEATH = of("DEATH");
+
         /**
          * Indicates data saved when the server shut down
          *
          * @since 2.0
          */
-        SERVER_SHUTDOWN,
+        public static final SaveCause SERVER_SHUTDOWN = of("SERVER_SHUTDOWN", false);
+
         /**
          * Indicates data was saved by editing inventory contents via the {@code /inventory} command
          *
          * @since 2.0
          */
-        INVENTORY_COMMAND,
+        public static final SaveCause INVENTORY_COMMAND = of("INVENTORY_COMMAND");
+
         /**
          * Indicates data was saved by editing Ender Chest contents via the {@code /enderchest} command
          *
          * @since 2.0
          */
-        ENDERCHEST_COMMAND,
+        public static final SaveCause ENDERCHEST_COMMAND = of("ENDERCHEST_COMMAND");
+
         /**
          * Indicates data was saved by restoring it from a previous version
          *
          * @since 2.0
          */
-        BACKUP_RESTORE,
+        public static final SaveCause BACKUP_RESTORE = of("BACKUP_RESTORE");
+
+        /**
+         * Indicates data was saved from executing the {@code /userdata save} command
+         *
+         * @since 3.8
+         */
+        public static final SaveCause SAVE_COMMAND = of("SAVE_COMMAND", true);
+
+        /**
+         * Indicates data was saved from executing the {@code /userdata dump} command
+         *
+         * @since 3.8
+         */
+        public static final SaveCause DUMP_COMMAND = of("DUMP_COMMAND", true);
+
         /**
          * Indicates data was saved by an API call
          *
          * @since 2.0
          */
-        API,
+        public static final SaveCause API = of("API");
+
         /**
          * Indicates data was saved from being imported from MySQLPlayerDataBridge
          *
          * @since 2.0
          */
-        MPDB_MIGRATION,
+        public static final SaveCause MPDB_MIGRATION = of("MPDB_MIGRATION", false);
+
         /**
          * Indicates data was saved from being imported from a legacy version (v1.x -> v2.x)
          *
          * @since 2.0
          */
-        LEGACY_MIGRATION,
+        public static final SaveCause LEGACY_MIGRATION = of("LEGACY_MIGRATION", false);
+
         /**
          * Indicates data was saved from being imported from a legacy version (v2.x -> v3.x)
          *
          * @since 3.0
          */
-        CONVERTED_FROM_V2;
+        public static final SaveCause CONVERTED_FROM_V2 = of("CONVERTED_FROM_V2", false);
 
         @NotNull
-        public String getDisplayName() {
-            return Locales.truncate(name().toLowerCase(Locale.ENGLISH)
-                    .replaceAll("_", " "), 18);
+        private final String name;
+
+        private final boolean fireDataSaveEvent;
+
+        private static Map<String, SaveCause> registry;
+
+        /**
+         * Get or create a {@link SaveCause} from a name
+         *
+         * @param name the name to be displayed
+         * @return the cause
+         */
+        @NotNull
+        public static SaveCause of(@NotNull String name) {
+            return of(name, true);
         }
 
+        /**
+         * Get or create a {@link SaveCause} from a name and whether it should fire a save event
+         *
+         * @param name           the name to be displayed
+         * @param firesSaveEvent whether the cause should fire a save event
+         * @return the cause
+         */
+        @NotNull
+        public static SaveCause of(@NotNull String name, boolean firesSaveEvent) {
+            name = name.length() > 32 ? name.substring(0, 31) : name;
+
+            if (registry == null) registry = new HashMap<>();
+            if (registry.containsKey(name)) return registry.get(name);
+
+            SaveCause cause = new SaveCause(name, firesSaveEvent);
+            registry.put(cause.name(), cause);
+            return cause;
+        }
+
+        @NotNull
+        public String getLocale(@NotNull HuskSync plugin) {
+            return plugin.getLocales()
+                    .getRawLocale("save_cause_%s".formatted(name().toLowerCase(Locale.ENGLISH)))
+                    .orElse(getDisplayName());
+        }
+
+        @NotNull
+        @ApiStatus.Obsolete
+        public static SaveCause[] values() {
+            if (registry == null) registry = new HashMap<>();
+            return registry.values().toArray(new SaveCause[0]);
+        }
     }
 
     /**
-     * Represents the cause of a player having their data updated.
+     * A string wrapper, for identifying the cause of a player data update.
+     * </p>
+     * Cause names have a max length of 32 characters.
      */
-    public enum UpdateCause {
+    @Accessors(fluent = true)
+    @Getter
+    @AllArgsConstructor(access = AccessLevel.PRIVATE)
+    public static class UpdateCause implements Cause {
+
         /**
          * Indicates the data was updated by a synchronization process
          *
          * @since 3.0
          */
-        SYNCHRONIZED("synchronization_complete", "synchronization_failed"),
+        public static final UpdateCause SYNCHRONIZED = of("SYNCHRONIZED",
+                "synchronization_complete", "synchronization_failed"
+        );
+
         /**
          * Indicates the data was updated by a user joining the server
          *
          * @since 3.0
          */
-        NEW_USER("user_registration_complete", null),
+        public static final UpdateCause NEW_USER = of("NEW_USER",
+                "user_registration_complete", null
+        );
+
         /**
          * Indicates the data was updated by a data update process (management command, API, etc.)
          *
          * @since 3.0
          */
-        UPDATED("data_update_complete", "data_update_failed");
+        public static final UpdateCause UPDATED = of("UPDATED",
+                "data_update_complete", "data_update_failed"
+        );
 
-        private final String completedLocale;
-        private final String failureLocale;
+        /**
+         * Indicates data was saved by an API call
+         *
+         * @since 3.3.3
+         */
+        public static final UpdateCause API = of("API");
 
-        UpdateCause(@Nullable String completedLocale, @Nullable String failureLocale) {
-            this.completedLocale = completedLocale;
-            this.failureLocale = failureLocale;
+        @NotNull
+        private final String name;
+        @Nullable
+        private String completedLocale;
+        @Nullable
+        private String failureLocale;
+
+        /**
+         * Get or create a {@link UpdateCause} from a name and completed/failure locales
+         *
+         * @param name            the name to be displayed
+         * @param completedLocale the locale to be displayed on successful update,
+         *                        or {@code null} if none is to be shown
+         * @param failureLocale   the locale to be displayed on a failed update,
+         *                        or {@code null} if none is to be shown
+         * @return the cause
+         */
+        public static UpdateCause of(@NotNull String name, @Nullable String completedLocale,
+                                     @Nullable String failureLocale) {
+            return new UpdateCause(
+                    name.length() > 32 ? name.substring(0, 31) : name,
+                    completedLocale, failureLocale
+            );
         }
 
+        /**
+         * Get or create a {@link UpdateCause} from a name
+         *
+         * @param name the name to be displayed
+         * @return the cause
+         */
+        @NotNull
+        public static UpdateCause of(@NotNull String name) {
+            return of(name, null, null);
+        }
+
+        /**
+         * Get the message to be displayed when a user's data is successfully updated.
+         *
+         * @param plugin plugin instance
+         * @return the message
+         */
         public Optional<MineDown> getCompletedLocale(@NotNull HuskSync plugin) {
-            if (completedLocale != null) {
-                return plugin.getLocales().getLocale(completedLocale);
+            if (completedLocale() != null) {
+                return Optional.of(plugin.getLocales().getLocale(completedLocale())
+                        .orElse(plugin.getLocales().format(getDisplayName())));
             }
             return Optional.empty();
         }
 
+        /**
+         * Get the message to be displayed when a user's data fails to update.
+         *
+         * @param plugin plugin instance
+         * @return the message
+         */
         public Optional<MineDown> getFailedLocale(@NotNull HuskSync plugin) {
-            if (failureLocale != null) {
-                return plugin.getLocales().getLocale(failureLocale);
+            if (failureLocale() != null) {
+                return Optional.of(plugin.getLocales().getLocale(failureLocale())
+                        .orElse(plugin.getLocales().format(failureLocale())));
             }
             return Optional.empty();
         }
 
+        @NotNull
+        public static UpdateCause[] values() {
+            return new UpdateCause[]{
+                    SYNCHRONIZED, NEW_USER, UPDATED
+            };
+        }
     }
 }

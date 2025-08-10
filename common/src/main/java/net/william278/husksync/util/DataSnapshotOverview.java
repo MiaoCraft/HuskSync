@@ -28,6 +28,7 @@ import net.william278.husksync.user.User;
 import org.jetbrains.annotations.NotNull;
 
 import java.time.format.DateTimeFormatter;
+import java.time.format.FormatStyle;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -58,33 +59,35 @@ public class DataSnapshotOverview {
         // Title message, timestamp, owner and cause.
         final Locales locales = plugin.getLocales();
         locales.getLocale("data_manager_title", snapshot.getShortId(), snapshot.getId().toString(),
-                        dataOwner.getUsername(), dataOwner.getUuid().toString())
+                        dataOwner.getName(), dataOwner.getUuid().toString())
                 .ifPresent(user::sendMessage);
         locales.getLocale("data_manager_timestamp",
-                        snapshot.getTimestamp().format(DateTimeFormatter.ofPattern("MMM dd yyyy, HH:mm:ss.SSS")),
+                        snapshot.getTimestamp().format(DateTimeFormatter
+                                .ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)),
                         snapshot.getTimestamp().toString())
                 .ifPresent(user::sendMessage);
         if (snapshot.isPinned()) {
             locales.getLocale("data_manager_pinned")
                     .ifPresent(user::sendMessage);
         }
-        locales.getLocale("data_manager_cause", snapshot.getSaveCause().getDisplayName())
+        locales.getLocale("data_manager_cause", snapshot.getSaveCause().getLocale(plugin))
                 .ifPresent(user::sendMessage);
         locales.getLocale("data_manager_server", snapshot.getServerName())
                 .ifPresent(user::sendMessage);
 
         // User status data, if present in the snapshot
         final Optional<Data.Health> health = snapshot.getHealth();
+        final Optional<Data.Attributes> attributes = snapshot.getAttributes();
         final Optional<Data.Hunger> food = snapshot.getHunger();
-        final Optional<Data.Experience> experience = snapshot.getExperience();
-        final Optional<Data.GameMode> gameMode = snapshot.getGameMode();
-        if (health.isPresent() && food.isPresent() && experience.isPresent() && gameMode.isPresent()) {
+        final Optional<Data.Experience> exp = snapshot.getExperience();
+        final Optional<Data.GameMode> mode = snapshot.getGameMode();
+        if (health.isPresent() && attributes.isPresent() && food.isPresent() && exp.isPresent() && mode.isPresent()) {
             locales.getLocale("data_manager_status",
                             Integer.toString((int) health.get().getHealth()),
-                            Integer.toString((int) health.get().getMaxHealth()),
+                            Integer.toString((int) attributes.get().getMaxHealth()),
                             Integer.toString(food.get().getFoodLevel()),
-                            Integer.toString(experience.get().getExpLevel()),
-                            gameMode.get().getGameMode().toLowerCase(Locale.ENGLISH))
+                            Integer.toString(exp.get().getExpLevel()),
+                            mode.get().getGameMode().toLowerCase(Locale.ENGLISH))
                     .ifPresent(user::sendMessage);
         }
 
@@ -103,14 +106,14 @@ public class DataSnapshotOverview {
                 .ifPresent(user::sendMessage);
 
         if (user.hasPermission("husksync.command.inventory.edit")
-                && user.hasPermission("husksync.command.enderchest.edit")) {
-            locales.getLocale("data_manager_item_buttons", dataOwner.getUsername(), snapshot.getId().toString())
+            && user.hasPermission("husksync.command.enderchest.edit")) {
+            locales.getLocale("data_manager_item_buttons", dataOwner.getName(), snapshot.getId().toString())
                     .ifPresent(user::sendMessage);
         }
-        locales.getLocale("data_manager_management_buttons", dataOwner.getUsername(), snapshot.getId().toString())
+        locales.getLocale("data_manager_management_buttons", dataOwner.getName(), snapshot.getId().toString())
                 .ifPresent(user::sendMessage);
         if (user.hasPermission("husksync.command.userdata.dump")) {
-            locales.getLocale("data_manager_system_buttons", dataOwner.getUsername(), snapshot.getId().toString())
+            locales.getLocale("data_manager_system_buttons", dataOwner.getName(), snapshot.getId().toString())
                     .ifPresent(user::sendMessage);
         }
     }

@@ -19,22 +19,21 @@
 
 package net.william278.husksync.database;
 
+import lombok.Getter;
 import net.william278.husksync.HuskSync;
 import net.william278.husksync.config.Settings;
 import net.william278.husksync.data.DataSnapshot;
-import net.william278.husksync.data.DataSnapshot.SaveCause;
-import net.william278.husksync.data.UserDataHolder;
 import net.william278.husksync.user.User;
+import org.intellij.lang.annotations.Language;
 import org.jetbrains.annotations.Blocking;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
+import java.util.function.BiConsumer;
 
 /**
  * An abstract representation of the plugin database, storing player data.
@@ -59,8 +58,8 @@ public abstract class Database {
     @SuppressWarnings("SameParameterValue")
     @NotNull
     protected final String[] getSchemaStatements(@NotNull String schemaFileName) throws IOException {
-        return formatStatementTables(new String(Objects.requireNonNull(plugin.getResource(schemaFileName))
-                .readAllBytes(), StandardCharsets.UTF_8)).split(";");
+        return Arrays.stream(formatStatementTables(new String(Objects.requireNonNull(plugin.getResource(schemaFileName))
+                .readAllBytes(), StandardCharsets.UTF_8)).split(";")).filter(s -> !s.isBlank()).toArray(String[]::new);
     }
 
     /**
@@ -70,9 +69,12 @@ public abstract class Database {
      * @return the formatted statement, with table placeholders replaced with the correct names
      */
     @NotNull
-    protected final String formatStatementTables(@NotNull String sql) {
-        return sql.replaceAll("%users_table%", plugin.getSettings().getTableName(Settings.TableName.USERS))
-                .replaceAll("%user_data_table%", plugin.getSettings().getTableName(Settings.TableName.USER_DATA));
+    protected final String formatStatementTables(@NotNull @Language("SQL") String sql) {
+        final Settings.DatabaseSettings settings = plugin.getSettings().getDatabase();
+        return sql.replaceAll("%users_table%", settings.getTableName(TableName.USERS))
+                .replaceAll("%user_data_table%", settings.getTableName(TableName.USER_DATA))
+                .replaceAll("%map_data_table%", settings.getTableName(TableName.MAP_DATA))
+                .replaceAll("%map_ids_table%", settings.getTableName(TableName.MAP_IDS));
     }
 
     /**
@@ -109,6 +111,14 @@ public abstract class Database {
     @Blocking
     public abstract Optional<User> getUserByName(@NotNull String username);
 
+    /**
+     * Get all users
+     *
+     * @return A list of all users
+     */
+    @NotNull
+    @Blocking
+    public abstract List<User> getAllUsers();
 
     /**
      * Get the latest data snapshot for a user.
@@ -128,6 +138,15 @@ public abstract class Database {
     @Blocking
     @NotNull
     public abstract List<DataSnapshot.Packed> getAllSnapshots(@NotNull User user);
+
+    /**
+     * Get the number of unpinned {@link DataSnapshot}s a user has
+     *
+     * @param user the user to count snapshots for
+     * @return the number of snapshots this user has saved
+     */
+    @Blocking
+    public abstract int getUnpinnedSnapshotCount(@NotNull User user);
 
     /**
      * Gets a specific {@link DataSnapshot} entry for a user from the database, by its UUID.
@@ -157,43 +176,24 @@ public abstract class Database {
     @Blocking
     public abstract boolean deleteSnapshot(@NotNull User user, @NotNull UUID versionUuid);
 
-    /**
-     * Save user data to the database
-     * </p>
-     * This will remove the oldest data for the user if the amount of data exceeds the limit as configured
-     *
-     * @param user     The user to add data for
-     * @param snapshot The {@link DataSnapshot} to set.
-     *                 The implementation should version it with a random UUID and the current timestamp during insertion.
-     * @see UserDataHolder#createSnapshot(SaveCause)
-     */
-    @Blocking
-    public void addSnapshot(@NotNull User user, @NotNull DataSnapshot.Packed snapshot) {
-        if (snapshot.getSaveCause() != SaveCause.SERVER_SHUTDOWN) {
-            plugin.fireEvent(
-                    plugin.getDataSaveEvent(user, snapshot),
-                    (event) -> this.addAndRotateSnapshot(user, snapshot)
-            );
-            return;
-        }
-
-        this.addAndRotateSnapshot(user, snapshot);
-    }
 
     /**
-     * <b>Internal</b> - Save user data to the database. This will:
+     * Save user data to the database, doing the following (in order):
      * <ol>
      *     <li>Delete their most recent snapshot, if it was created before the backup frequency time</li>
      *     <li>Create the snapshot</li>
      *     <li>Rotate snapshot backups</li>
      * </ol>
+     * This is an expensive blocking method and should be run off the main thread.
      *
      * @param user     The user to add data for
      * @param snapshot The {@link DataSnapshot} to set.
+     * @apiNote Prefer {@link net.william278.husksync.sync.DataSyncer#saveData(User, DataSnapshot.Packed, BiConsumer)}.
+     * </p>This method will not fire the {@link net.william278.husksync.event.DataSaveEvent}
      */
     @Blocking
-    private void addAndRotateSnapshot(@NotNull User user, @NotNull DataSnapshot.Packed snapshot) {
-        final int backupFrequency = plugin.getSettings().getBackupFrequency();
+    public void addSnapshot(@NotNull User user, @NotNull DataSnapshot.Packed snapshot) {
+        final int backupFrequency = plugin.getSettings().getSynchronization().getSnapshotBackupFrequency();
         if (!snapshot.isPinned() && backupFrequency > 0) {
             this.rotateLatestSnapshot(user, snapshot.getTimestamp().minusHours(backupFrequency));
         }
@@ -260,6 +260,58 @@ public abstract class Database {
     }
 
     /**
+     * Write map data to a database
+     *
+     * @param serverName Name of the server the map originates from
+     * @param mapId      Original map ID
+     * @param data       Map data
+     */
+    @Blocking
+    public abstract void saveMapData(@NotNull String serverName, int mapId, byte @NotNull [] data);
+
+    /**
+     * Read map data from a database
+     *
+     * @param serverName Name of the server the map originates from
+     * @param mapId      Original map ID
+     * @return Map.Entry (key: map data, value: is from current world)
+     */
+    @Blocking
+    public abstract @Nullable Map.Entry<byte[], Boolean> getMapData(@NotNull String serverName, int mapId);
+
+    /**
+     * Get a map server -> ID binding in the database
+     *
+     * @param serverName Name of the server the map originates from
+     * @param mapId      Original map ID
+     * @return Map.Entry (key: server name, value: map ID)
+     */
+    @Blocking
+    public abstract @Nullable Map.Entry<String, Integer> getMapBinding(@NotNull String serverName, int mapId);
+
+    /**
+     * Bind map IDs across different servers
+     *
+     * @param fromServerName Name of the server the map originates from
+     * @param fromMapId      Original map ID
+     * @param toServerName   Name of the new server
+     * @param toMapId        New map ID
+     */
+    @Blocking
+    public abstract void setMapBinding(@NotNull String fromServerName, int fromMapId, @NotNull String toServerName, int toMapId);
+
+    /**
+     * Get map ID for the new server
+     *
+     * @param fromServerName Name of the server the map originates from
+     * @param fromMapId      Original map ID
+     * @param toServerName   Name of the new server
+     * @return New map ID or -1 if not found
+     */
+    @Blocking
+    public abstract int getBoundMapId(@NotNull String fromServerName, int fromMapId, @NotNull String toServerName);
+
+    /**
      * Wipes <b>all</b> {@link User} entries from the database.
      * <b>This should only be used when preparing tables for a data migration.</b>
      */
@@ -274,9 +326,12 @@ public abstract class Database {
     /**
      * Identifies types of databases
      */
+    @Getter
     public enum Type {
         MYSQL("MySQL", "mysql"),
-        MARIADB("MariaDB", "mariadb");
+        MARIADB("MariaDB", "mariadb"),
+        POSTGRES("PostgreSQL", "postgresql"),
+        MONGO("MongoDB", "mongo");
 
         private final String displayName;
         private final String protocol;
@@ -285,16 +340,35 @@ public abstract class Database {
             this.displayName = displayName;
             this.protocol = protocol;
         }
-
-        @NotNull
-        public String getDisplayName() {
-            return displayName;
-        }
-
-        @NotNull
-        public String getProtocol() {
-            return protocol;
-        }
     }
 
+    /**
+     * Represents the names of tables in the database
+     */
+    @Getter
+    public enum TableName {
+        USERS("husksync_users"),
+        USER_DATA("husksync_user_data"),
+        MAP_DATA("husksync_map_data"),
+        MAP_IDS("husksync_map_ids");
+
+        private final String defaultName;
+
+        TableName(@NotNull String defaultName) {
+            this.defaultName = defaultName;
+        }
+
+        @NotNull
+        private Map.Entry<String, String> toEntry() {
+            return Map.entry(name().toLowerCase(Locale.ENGLISH), defaultName);
+        }
+
+        @SuppressWarnings("unchecked")
+        @NotNull
+        public static Map<String, String> getDefaults() {
+            return Map.ofEntries(Arrays.stream(values())
+                    .map(TableName::toEntry)
+                    .toArray(Map.Entry[]::new));
+        }
+    }
 }

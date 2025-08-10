@@ -19,9 +19,13 @@
 
 package net.william278.husksync.config;
 
-import net.william278.annotaml.YamlComment;
-import net.william278.annotaml.YamlFile;
-import net.william278.annotaml.YamlKey;
+import com.google.common.collect.Lists;
+import de.exlll.configlib.Comment;
+import de.exlll.configlib.Configuration;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import net.william278.husksync.command.PluginCommand;
 import net.william278.husksync.data.DataSnapshot;
 import net.william278.husksync.data.Identifier;
 import net.william278.husksync.database.Database;
@@ -29,416 +33,362 @@ import net.william278.husksync.listener.EventListener;
 import net.william278.husksync.sync.DataSyncer;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * Plugin settings, read from config.yml
  */
-@YamlFile(header = """
-        ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-        ┃        HuskSync Config       ┃
-        ┃    Developed by William278   ┃
-        ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-        ┣╸ Information: https://william278.net/project/husksync
-        ┣╸ Config Help: https://william278.net/docs/husksync/config-file/
-        ┗╸ Documentation: https://william278.net/docs/husksync""")
+@SuppressWarnings("FieldMayBeFinal")
+@Getter
+@Configuration
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class Settings {
 
-    // Top-level settings
-    @YamlComment("Locale of the default language file to use. Docs: https://william278.net/docs/husksync/translations")
-    @YamlKey("language")
-    private String language = "en-gb";
+    protected static final String CONFIG_HEADER = """
+            ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+            ┃        HuskSync Config       ┃
+            ┃    Developed by William278   ┃
+            ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+            ┣╸ Information: https://william278.net/project/husksync
+            ┣╸ Config Help: https://william278.net/docs/husksync/config-file/
+            ┗╸ Documentation: https://william278.net/docs/husksync""";
 
-    @YamlComment("Whether to automatically check for plugin updates on startup")
-    @YamlKey("check_for_updates")
+    // Top-level settings
+    @Comment({"Locale of the default language file to use.", "Docs: https://william278.net/docs/husksync/translations"})
+    private String language = Locales.DEFAULT_LOCALE;
+
+    @Comment("Whether to automatically check for plugin updates on startup")
     private boolean checkForUpdates = true;
 
-    @YamlComment("Specify a common ID for grouping servers running HuskSync. "
-            + "Don't modify this unless you know what you're doing!")
-    @YamlKey("cluster_id")
+    @Comment("Specify a common ID for grouping servers running HuskSync. "
+             + "Don't modify this unless you know what you're doing!")
     private String clusterId = "";
 
-    @YamlComment("Enable development debug logging")
-    @YamlKey("debug_logging")
+    @Comment("Enable development debug logging")
     private boolean debugLogging = false;
 
-    @YamlComment("Whether to provide modern, rich TAB suggestions for commands (if available)")
-    @YamlKey("brigadier_tab_completion")
-    private boolean brigadierTabCompletion = false;
-
-    @YamlComment("Whether to enable the Player Analytics hook. Docs: https://william278.net/docs/husksync/plan-hook")
-    @YamlKey("enable_plan_hook")
+    @Comment({"Whether to enable the Player Analytics hook.", "Docs: https://william278.net/docs/husksync/plan-hook"})
     private boolean enablePlanHook = true;
 
+    @Comment("Whether to cancel game event packets directly when handling locked players if ProtocolLib or PacketEvents is installed")
+    private boolean cancelPackets = true;
+
+    @Comment("Add HuskSync commands to this list to prevent them from being registered (e.g. ['userdata'])")
+    @Getter(AccessLevel.NONE)
+    private List<String> disabledCommands = Lists.newArrayList();
 
     // Database settings
-    @YamlComment("Type of database to use (MYSQL, MARIADB)")
-    @YamlKey("database.type")
-    private Database.Type databaseType = Database.Type.MYSQL;
+    @Comment("Database settings")
+    private DatabaseSettings database = new DatabaseSettings();
 
-    @YamlComment("Specify credentials here for your MYSQL or MARIADB database")
-    @YamlKey("database.credentials.host")
-    private String mySqlHost = "localhost";
+    @Getter
+    @Configuration
+    @NoArgsConstructor(access = AccessLevel.PRIVATE)
+    public static class DatabaseSettings {
 
-    @YamlKey("database.credentials.port")
-    private int mySqlPort = 3306;
+        @Comment("Type of database to use (MYSQL, MARIADB, POSTGRES, MONGO)")
+        private Database.Type type = Database.Type.MYSQL;
 
-    @YamlKey("database.credentials.database")
-    private String mySqlDatabase = "HuskSync";
+        @Comment("Specify credentials here for your MYSQL, MARIADB, POSTGRES OR MONGO database")
+        private DatabaseCredentials credentials = new DatabaseCredentials();
 
-    @YamlKey("database.credentials.username")
-    private String mySqlUsername = "root";
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class DatabaseCredentials {
+            private String host = "localhost";
+            private int port = 3306;
+            private String database = "HuskSync";
+            private String username = "root";
+            private String password = "pa55w0rd";
+            @Comment("Only change this if you're using MARIADB or POSTGRES")
+            private String parameters = String.join("&",
+                    "?autoReconnect=true", "useSSL=false",
+                    "useUnicode=true", "characterEncoding=UTF-8");
+        }
 
-    @YamlKey("database.credentials.password")
-    private String mySqlPassword = "pa55w0rd";
+        @Comment("MYSQL, MARIADB, POSTGRES database Hikari connection pool properties. Don't modify this unless you know what you're doing!")
+        private PoolSettings connectionPool = new PoolSettings();
 
-    @YamlKey("database.credentials.parameters")
-    private String mySqlConnectionParameters = "?autoReconnect=true"
-            + "&useSSL=false"
-            + "&useUnicode=true"
-            + "&characterEncoding=UTF-8";
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class PoolSettings {
+            private int maximumPoolSize = 10;
+            private int minimumIdle = 10;
+            private long maximumLifetime = 1800000;
+            private long keepaliveTime = 0;
+            private long connectionTimeout = 5000;
+        }
 
-    @YamlComment("MYSQL / MARIADB database Hikari connection pool properties. "
-            + "Don't modify this unless you know what you're doing!")
-    @YamlKey("database.connection_pool.maximum_pool_size")
-    private int mySqlConnectionPoolSize = 10;
+        @Comment("Advanced MongoDB settings. Don't modify unless you know what you're doing!")
+        private MongoSettings mongoSettings = new MongoSettings();
 
-    @YamlKey("database.connection_pool.minimum_idle")
-    private int mySqlConnectionPoolIdle = 10;
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class MongoSettings {
+            private boolean usingAtlas = false;
+            private String parameters = String.join("&",
+                    "?retryWrites=true", "w=majority",
+                    "authSource=HuskSync");
+        }
 
-    @YamlKey("database.connection_pool.maximum_lifetime")
-    private long mySqlConnectionPoolLifetime = 1800000;
+        @Comment("Names of tables to use on your database. Don't modify this unless you know what you're doing!")
+        @Getter(AccessLevel.NONE)
+        private Map<String, String> tableNames = Database.TableName.getDefaults();
 
-    @YamlKey("database.connection_pool.keepalive_time")
-    private long mySqlConnectionPoolKeepAlive = 0;
+        @Comment("Whether to run the creation SQL on the database when the server starts. Don't modify this unless you know what you're doing!")
+        private boolean createTables = true;
 
-    @YamlKey("database.connection_pool.connection_timeout")
-    private long mySqlConnectionPoolTimeout = 5000;
-
-    @YamlComment("Names of tables to use on your database. Don't modify this unless you know what you're doing!")
-    @YamlKey("database.table_names")
-    private Map<String, String> tableNames = TableName.getDefaults();
-
+        @NotNull
+        public String getTableName(@NotNull Database.TableName tableName) {
+            return tableNames.getOrDefault(tableName.name().toLowerCase(Locale.ENGLISH), tableName.getDefaultName());
+        }
+    }
 
     // Redis settings
-    @YamlComment("Specify the credentials of your Redis database here. Set \"password\" to '' if you don't have one")
-    @YamlKey("redis.credentials.host")
-    private String redisHost = "localhost";
+    @Comment("Redis settings")
+    private RedisSettings redis = new RedisSettings();
 
-    @YamlKey("redis.credentials.port")
-    private int redisPort = 6379;
+    @Getter
+    @Configuration
+    @NoArgsConstructor(access = AccessLevel.PRIVATE)
+    public static class RedisSettings {
 
-    @YamlKey("redis.credentials.password")
-    private String redisPassword = "";
+        @Comment({"Specify the credentials of your Redis server here.",
+                "Set \"user\" to '' if you don't have one or would like to use the default user.",
+                "Set \"password\" to '' if you don't have one."})
+        private RedisCredentials credentials = new RedisCredentials();
 
-    @YamlKey("redis.use_ssl")
-    private boolean redisUseSsl = false;
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class RedisCredentials {
+            private String host = "localhost";
+            private int port = 6379;
+            @Comment("Only change the database if you know what you are doing. The default is 0.")
+            private int database = 0;
+            private String user = "";
+            private String password = "";
 
+            @Comment("Use SSL/TLS for encrypted connections.")
+            private boolean useSsl = false;
+
+            @Comment("Connection timeout in milliseconds.")
+            private int connectionTimeout = 2000;
+
+            @Comment("Socket (read/write) timeout in milliseconds.")
+            private int socketTimeout = 2000;
+
+            @Comment("Max number of connections in the pool.")
+            private int maxTotalConnections = 50;
+
+            @Comment("Max number of idle connections in the pool.")
+            private int maxIdleConnections = 8;
+
+            @Comment("Min number of idle connections in the pool.")
+            private int minIdleConnections = 2;
+
+            @Comment("Enable health checks when borrowing connections from the pool.")
+            private boolean testOnBorrow = true;
+
+            @Comment("Enable health checks when returning connections to the pool.")
+            private boolean testOnReturn = true;
+
+            @Comment("Enable periodic idle connection health checks.")
+            private boolean testWhileIdle = true;
+
+            @Comment("Min evictable idle time (ms) before a connection is eligible for eviction.")
+            private long minEvictableIdleTimeMillis = 60000;
+
+            @Comment("Time (ms) between eviction runs.")
+            private long timeBetweenEvictionRunsMillis = 30000;
+
+            @Comment("Number of retries for commands when connection fails.")
+            private int maxRetries = 3;
+
+            @Comment("Base backoff time in ms for retries (exponential backoff multiplier).")
+            private int retryBackoffMillis = 200;
+        }
+
+        @Comment("Options for if you're using Redis sentinel. Don't modify this unless you know what you're doing!")
+        private RedisSentinel sentinel = new RedisSentinel();
+
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class RedisSentinel {
+            @Comment("The master set name for the Redis sentinel.")
+            private String master = "";
+            @Comment("List of host:port pairs")
+            private List<String> nodes = Lists.newArrayList();
+            private String password = "";
+        }
+
+    }
 
     // Synchronization settings
-    @YamlComment("The mode of data synchronization to use (DELAY or LOCKSTEP). DELAY should be fine for most networks."
-            + " Docs: https://william278.net/docs/husksync/sync-modes")
-    @YamlKey("synchronization.mode")
-    private DataSyncer.Mode syncMode = DataSyncer.Mode.DELAY;
+    @Comment("Data syncing settings")
+    private SynchronizationSettings synchronization = new SynchronizationSettings();
 
-    @YamlComment("The number of data snapshot backups that should be kept at once per user")
-    @YamlKey("synchronization.max_user_data_snapshots")
-    private int maxUserDataSnapshots = 16;
+    @Getter
+    @Configuration
+    @NoArgsConstructor(access = AccessLevel.PRIVATE)
+    public static class SynchronizationSettings {
 
-    @YamlComment("Number of hours between new snapshots being saved as backups (Use \"0\" to backup all snapshots)")
-    @YamlKey("synchronization.snapshot_backup_frequency")
-    private int snapshotBackupFrequency = 4;
+        @Comment({"The data synchronization mode to use (LOCKSTEP or DELAY). LOCKSTEP is recommended for most networks.",
+                "Docs: https://william278.net/docs/husksync/sync-modes"})
+        private DataSyncer.Mode mode = DataSyncer.Mode.LOCKSTEP;
 
-    @YamlComment("List of save cause IDs for which a snapshot will be automatically pinned (so it won't be rotated)."
-            + " Docs: https://william278.net/docs/husksync/data-rotation#save-causes")
-    @YamlKey("synchronization.auto_pinned_save_causes")
-    private List<String> autoPinnedSaveCauses = List.of(
-            DataSnapshot.SaveCause.INVENTORY_COMMAND.name(),
-            DataSnapshot.SaveCause.ENDERCHEST_COMMAND.name(),
-            DataSnapshot.SaveCause.BACKUP_RESTORE.name(),
-            DataSnapshot.SaveCause.LEGACY_MIGRATION.name(),
-            DataSnapshot.SaveCause.MPDB_MIGRATION.name()
-    );
+        @Comment("The number of data snapshot backups that should be kept at once per user")
+        private int maxUserDataSnapshots = 16;
 
-    @YamlComment("Whether to create a snapshot for users on a world when the server saves that world")
-    @YamlKey("synchronization.save_on_world_save")
-    private boolean saveOnWorldSave = true;
+        @Comment("Number of hours between new snapshots being saved as backups (Use \"0\" to backup all snapshots)")
+        private int snapshotBackupFrequency = 4;
 
-    @YamlComment("Whether to create a snapshot for users when they die (containing their death drops)")
-    @YamlKey("synchronization.save_on_death.enabled")
-    private boolean saveOnDeath = false;
+        @Comment({"List of save cause IDs for which a snapshot will be automatically pinned (so it won't be rotated).",
+                "Docs: https://william278.net/docs/husksync/data-rotation#save-causes"})
+        @Getter(AccessLevel.NONE)
+        private List<String> autoPinnedSaveCauses = List.of(
+                DataSnapshot.SaveCause.INVENTORY_COMMAND.name(),
+                DataSnapshot.SaveCause.ENDERCHEST_COMMAND.name(),
+                DataSnapshot.SaveCause.BACKUP_RESTORE.name(),
+                DataSnapshot.SaveCause.LEGACY_MIGRATION.name(),
+                DataSnapshot.SaveCause.MPDB_MIGRATION.name()
+        );
 
-    @YamlComment("What items to save in death snapshots? (DROPS or ITEMS_TO_KEEP). "
-            + " Note that ITEMS_TO_KEEP (suggested for keepInventory servers) requires a Paper 1.19.4+ server.")
-    @YamlKey("synchronization.save_on_death.items_to_save")
-    private DeathItemsMode deathItemsMode = DeathItemsMode.DROPS;
+        @Comment("Whether to create a snapshot for users on a world when the server saves that world")
+        private boolean saveOnWorldSave = true;
 
-    @YamlComment("Should a death snapshot still be created even if the items to save on the player's death are empty?")
-    @YamlKey("synchronization.save_on_death.save_empty_items")
-    private boolean saveEmptyDeathItems = true;
+        @Comment("Configuration for how and when to sync player data when they die")
+        private SaveOnDeathSettings saveOnDeath = new SaveOnDeathSettings();
 
-    @YamlComment("Whether dead players who log out and log in to a different server should have their items saved.")
-    @YamlKey("synchronization.save_on_death.sync_dead_players_changing_server")
-    private boolean synchronizeDeadPlayersChangingServer = true;
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class SaveOnDeathSettings {
+            @Comment("Whether to create a snapshot for users when they die (containing their death drops)")
+            private boolean enabled = false;
 
-    @YamlComment("Whether to use the snappy data compression algorithm. Keep on unless you know what you're doing")
-    @YamlKey("synchronization.compress_data")
-    private boolean compressData = true;
+            @Comment("What items to save in death snapshots? (DROPS or ITEMS_TO_KEEP). "
+                     + "Note that ITEMS_TO_KEEP (suggested for keepInventory servers) requires a Paper 1.19.4+ server.")
+            private DeathItemsMode itemsToSave = DeathItemsMode.DROPS;
 
-    @YamlComment("Where to display sync notifications (ACTION_BAR, CHAT, TOAST or NONE)")
-    @YamlKey("synchronization.notification_display_slot")
-    private Locales.NotificationSlot notificationSlot = Locales.NotificationSlot.ACTION_BAR;
+            @Comment("Should a death snapshot still be created even if the items to save on the player's death are empty?")
+            private boolean saveEmptyItems = true;
 
-    @YamlComment("(Experimental) Persist Cartography Table locked maps to let them be viewed on any server")
-    @YamlKey("synchronization.persist_locked_maps")
-    private boolean persistLockedMaps = true;
+            @Comment("Whether dead players who log out and log in to a different server should have their items saved.")
+            private boolean syncDeadPlayersChangingServer = true;
 
-    @YamlComment("Whether to synchronize player max health (requires health syncing to be enabled)")
-    @YamlKey("synchronization.synchronize_max_health")
-    private boolean synchronizeMaxHealth = true;
-
-    @YamlComment("If using the DELAY sync method, how long should this server listen for Redis key data updates before "
-            + "pulling data from the database instead (i.e., if the user did not change servers).")
-    @YamlKey("synchronization.network_latency_milliseconds")
-    private int networkLatencyMilliseconds = 500;
-
-    @YamlComment("Which data types to synchronize (Docs: https://william278.net/docs/husksync/sync-features)")
-    @YamlKey("synchronization.features")
-    private Map<String, Boolean> synchronizationFeatures = Identifier.getConfigMap();
-
-    @YamlComment("Commands which should be blocked before a player has finished syncing (Use * to block all commands)")
-    @YamlKey("synchronization.blacklisted_commands_while_locked")
-    private List<String> blacklistedCommandsWhileLocked = new ArrayList<>(List.of("*"));
-
-    @YamlComment("Event priorities for listeners (HIGHEST, NORMAL, LOWEST). Change if you encounter plugin conflicts")
-    @YamlKey("synchronization.event_priorities")
-    private Map<String, String> syncEventPriorities = EventListener.ListenerType.getDefaults();
-
-
-    // Zero-args constructor for instantiation via Annotaml
-    @SuppressWarnings("unused")
-    public Settings() {
-    }
-
-
-    @NotNull
-    public String getLanguage() {
-        return language;
-    }
-
-    public boolean doCheckForUpdates() {
-        return checkForUpdates;
-    }
-
-    @NotNull
-    public String getClusterId() {
-        return clusterId;
-    }
-
-    public boolean doDebugLogging() {
-        return debugLogging;
-    }
-
-    public boolean doBrigadierTabCompletion() {
-        return brigadierTabCompletion;
-    }
-
-    public boolean usePlanHook() {
-        return enablePlanHook;
-    }
-
-    @NotNull
-    public Database.Type getDatabaseType() {
-        return databaseType;
-    }
-
-    @NotNull
-    public String getMySqlHost() {
-        return mySqlHost;
-    }
-
-    public int getMySqlPort() {
-        return mySqlPort;
-    }
-
-    @NotNull
-    public String getMySqlDatabase() {
-        return mySqlDatabase;
-    }
-
-    @NotNull
-    public String getMySqlUsername() {
-        return mySqlUsername;
-    }
-
-    @NotNull
-    public String getMySqlPassword() {
-        return mySqlPassword;
-    }
-
-    @NotNull
-    public String getMySqlConnectionParameters() {
-        return mySqlConnectionParameters;
-    }
-
-    @NotNull
-    public String getTableName(@NotNull TableName tableName) {
-        return tableNames.getOrDefault(tableName.name().toLowerCase(Locale.ENGLISH), tableName.defaultName);
-    }
-
-    public int getMySqlConnectionPoolSize() {
-        return mySqlConnectionPoolSize;
-    }
-
-    public int getMySqlConnectionPoolIdle() {
-        return mySqlConnectionPoolIdle;
-    }
-
-    public long getMySqlConnectionPoolLifetime() {
-        return mySqlConnectionPoolLifetime;
-    }
-
-    public long getMySqlConnectionPoolKeepAlive() {
-        return mySqlConnectionPoolKeepAlive;
-    }
-
-    public long getMySqlConnectionPoolTimeout() {
-        return mySqlConnectionPoolTimeout;
-    }
-
-    @NotNull
-    public String getRedisHost() {
-        return redisHost;
-    }
-
-    public int getRedisPort() {
-        return redisPort;
-    }
-
-    @NotNull
-    public String getRedisPassword() {
-        return redisPassword;
-    }
-
-    public boolean redisUseSsl() {
-        return redisUseSsl;
-    }
-
-    @NotNull
-    public DataSyncer.Mode getSyncMode() {
-        return syncMode;
-    }
-
-    public int getMaxUserDataSnapshots() {
-        return maxUserDataSnapshots;
-    }
-
-    public int getBackupFrequency() {
-        return snapshotBackupFrequency;
-    }
-
-    public boolean doSaveOnWorldSave() {
-        return saveOnWorldSave;
-    }
-
-    public boolean doSaveOnDeath() {
-        return saveOnDeath;
-    }
-
-    @NotNull
-    public DeathItemsMode getDeathItemsMode() {
-        return deathItemsMode;
-    }
-
-    public boolean doSaveEmptyDeathItems() {
-        return saveEmptyDeathItems;
-    }
-
-    public boolean doCompressData() {
-        return compressData;
-    }
-
-    public boolean doAutoPin(@NotNull DataSnapshot.SaveCause cause) {
-        return autoPinnedSaveCauses.contains(cause.name());
-    }
-
-    @NotNull
-    public Locales.NotificationSlot getNotificationDisplaySlot() {
-        return notificationSlot;
-    }
-
-    public boolean doPersistLockedMaps() {
-        return persistLockedMaps;
-    }
-
-    public boolean doSynchronizeDeadPlayersChangingServer() {
-        return synchronizeDeadPlayersChangingServer;
-    }
-
-    public boolean doSynchronizeMaxHealth() {
-        return synchronizeMaxHealth;
-    }
-
-    public int getNetworkLatencyMilliseconds() {
-        return networkLatencyMilliseconds;
-    }
-
-    @NotNull
-    public Map<String, Boolean> getSynchronizationFeatures() {
-        return synchronizationFeatures;
-    }
-
-    public boolean isSyncFeatureEnabled(@NotNull Identifier id) {
-        return id.isCustom() || getSynchronizationFeatures().getOrDefault(id.getKeyValue(), id.isEnabledByDefault());
-    }
-
-    @NotNull
-    public List<String> getBlacklistedCommandsWhileLocked() {
-        return blacklistedCommandsWhileLocked;
-    }
-
-    @NotNull
-    public EventListener.Priority getEventPriority(@NotNull EventListener.ListenerType type) {
-        try {
-            return EventListener.Priority.valueOf(syncEventPriorities.get(type.name().toLowerCase(Locale.ENGLISH)));
-        } catch (IllegalArgumentException e) {
-            return EventListener.Priority.NORMAL;
+            /**
+             * Represents the mode of saving items on death
+             */
+            public enum DeathItemsMode {
+                DROPS,
+                ITEMS_TO_KEEP
+            }
         }
-    }
 
-    /**
-     * Represents the mode of saving items on death
-     */
-    public enum DeathItemsMode {
-        DROPS,
-        ITEMS_TO_KEEP
-    }
+        @Comment("Whether to use the snappy data compression algorithm. Keep on unless you know what you're doing")
+        private boolean compressData = true;
 
-    /**
-     * Represents the names of tables in the database
-     */
-    public enum TableName {
-        USERS("husksync_users"),
-        USER_DATA("husksync_user_data");
+        @Comment("Where to display sync notifications (ACTION_BAR, CHAT or NONE)")
+        private Locales.NotificationSlot notificationDisplaySlot = Locales.NotificationSlot.ACTION_BAR;
 
-        private final String defaultName;
+        @Comment("Persist maps locked in a Cartography Table to let them be viewed on any server")
+        private boolean persistLockedMaps = true;
 
-        TableName(@NotNull String defaultName) {
-            this.defaultName = defaultName;
+        @Comment("If using the DELAY sync method, how long should this server listen for Redis key data updates before "
+                 + "pulling data from the database instead (i.e., if the user did not change servers).")
+        private int networkLatencyMilliseconds = 500;
+
+        @Comment({"Which data types to synchronize.", "Docs: https://william278.net/docs/husksync/sync-features"})
+        @Getter(AccessLevel.NONE)
+        private Map<String, Boolean> features = Identifier.getConfigMap();
+
+        @Comment("Commands which should be blocked before a player has finished syncing (Use * to block all commands)")
+        private List<String> blacklistedCommandsWhileLocked = new ArrayList<>(List.of("*"));
+
+        @Comment("Configuration for how to sync attributes")
+        private AttributeSettings attributes = new AttributeSettings();
+
+        @Getter
+        @Configuration
+        @NoArgsConstructor(access = AccessLevel.PRIVATE)
+        public static class AttributeSettings {
+
+            @Comment({"Which attribute types should be saved as part of attribute syncing. Supports wildcard matching.",
+                    "(e.g. ['minecraft:generic.max_health', 'minecraft:generic.*'])"})
+            @Getter(AccessLevel.NONE)
+            private List<String> syncedAttributes = new ArrayList<>(List.of(
+                    "minecraft:generic.max_health", "minecraft:max_health",
+                    "minecraft:generic.max_absorption", "minecraft:max_absorption",
+                    "minecraft:generic.luck", "minecraft:luck",
+                    "minecraft:generic.scale", "minecraft:scale",
+                    "minecraft:generic.step_height", "minecraft:step_height",
+                    "minecraft:generic.gravity", "minecraft:gravity"
+            ));
+
+            @Comment({"Which attribute modifiers should be saved. Supports wildcard matching.",
+                    "(e.g. ['minecraft:effect.speed', 'minecraft:effect.*'])"})
+            @Getter(AccessLevel.NONE)
+            private List<String> ignoredModifiers = new ArrayList<>(List.of(
+                    "minecraft:effect.*", "minecraft:creative_mode_*"
+            ));
+
+            private boolean matchesWildcard(@NotNull String pat, @NotNull String value) {
+                if (!pat.contains(":")) {
+                    pat = "minecraft:%s".formatted(pat);
+                }
+                if (!value.contains(":")) {
+                    value = "minecraft:%s".formatted(value);
+                }
+                return pat.contains("*") ? value.matches(pat.replace("*", ".*")) : pat.equals(value);
+            }
+
+            public boolean isIgnoredAttribute(@NotNull String attribute) {
+                return syncedAttributes.stream().noneMatch(wildcard -> matchesWildcard(wildcard, attribute));
+            }
+
+            public boolean isIgnoredModifier(@NotNull String modifier) {
+                return ignoredModifiers.stream().anyMatch(wildcard -> matchesWildcard(wildcard, modifier));
+            }
+
+        }
+
+        @Comment("Event priorities for listeners (HIGHEST, NORMAL, LOWEST). Change if you encounter plugin conflicts")
+        @Getter(AccessLevel.NONE)
+        private Map<String, String> eventPriorities = EventListener.ListenerType.getDefaults();
+
+        @Comment("Enable check-in petitions for data syncing (don't change this unless you know what you're doing)")
+        private boolean checkinPetitions = false;
+
+        public boolean doAutoPin(@NotNull DataSnapshot.SaveCause cause) {
+            return autoPinnedSaveCauses.contains(cause.name());
+        }
+
+        public boolean isFeatureEnabled(@NotNull Identifier id) {
+            return id.isCustom() || features.getOrDefault(id.getKeyValue(), id.isEnabledByDefault());
         }
 
         @NotNull
-        private Map.Entry<String, String> toEntry() {
-            return Map.entry(name().toLowerCase(Locale.ENGLISH), defaultName);
-        }
-
-        @SuppressWarnings("unchecked")
-        @NotNull
-        private static Map<String, String> getDefaults() {
-            return Map.ofEntries(Arrays.stream(values())
-                    .map(TableName::toEntry)
-                    .toArray(Map.Entry[]::new));
+        public EventListener.Priority getEventPriority(@NotNull EventListener.ListenerType type) {
+            try {
+                return EventListener.Priority.valueOf(eventPriorities.get(type.name().toLowerCase(Locale.ENGLISH)));
+            } catch (IllegalArgumentException e) {
+                return EventListener.Priority.NORMAL;
+            }
         }
     }
+
+    public boolean isCommandDisabled(@NotNull PluginCommand command) {
+        return disabledCommands.stream().map(c -> c.startsWith("/") ? c.substring(1) : c)
+                .anyMatch(c -> c.equalsIgnoreCase(command.getName()) || command.getAliases().contains(c));
+    }
+
 
 }
