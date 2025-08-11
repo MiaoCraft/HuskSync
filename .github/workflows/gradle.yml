@@ -26,18 +26,11 @@ jobs:
       # 添加调试步骤，列出所有 JAR 文件
       - name: List generated JAR files
         run: find . -name "*.jar"
-      # 上传完整工作目录（包含所有生成文件）
-      - name: Upload Entire Workspace
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-environment
-          path: ${{ github.workspace }}
-          retention-days: 7  # 自动保留天数（可选）
 
       # 上传 Shadow JAR（主构建产物）
       - name: Upload HuskSync Shadow JAR
         uses: actions/upload-artifact@v4
         with:
           name: HuskSync
-          path: build/libs/HuskSync-*.jar
+          path: target/HuskSync-*.jar
           retention-days: 7
